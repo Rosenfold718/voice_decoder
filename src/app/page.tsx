@@ -254,7 +254,12 @@ export default function VoxPage() {
       rec.ondataavailable = (e) => { if (e.data.size > 0) parts.push(e.data); };
       rec.onstop = () => {
         if (parts.length === 0) {
-          toast({ title: "Запись пуста", variant: "destructive" });
+          toast({
+            title: "Запись пуста",
+            description: "Микрофон недоступен в текущей среде. Используйте вкладку «Файл» для загрузки аудио.",
+            variant: "destructive",
+            duration: 6000,
+          });
           return;
         }
         const blob = new Blob(parts, { type: mimeType });
@@ -293,7 +298,7 @@ export default function VoxPage() {
         stopRecording();
         toast({
           title: "Микрофон не захватывает звук",
-          description: "Возможно, вы находитесь в ограниченной среде (iframe). Запись работает только при открытии приложения в обычном браузере на ПК. Используйте вкладку «Файл» для загрузки аудио.",
+          description: "Запись работает только при запуске на ПК в браузере. Используйте вкладку «Файл».",
           variant: "destructive",
           duration: 6000,
         });
@@ -471,11 +476,35 @@ export default function VoxPage() {
                 {/* ---- RECORD MODE ---- */}
                 {mode === "record" && (
                   <div className="flex flex-col items-center py-12 sm:py-16">
+                    {/* Sandbox / iframe warning banner */}
+                    {!navigator.mediaDevices?.getUserMedia && (
+                      <div className="w-full rounded-xl bg-amber-500/[0.06] border border-amber-500/15 px-5 py-4 mb-8 text-center">
+                        <p className="text-[13px] text-amber-400/80 mb-1.5">
+                          Запись голоса недоступна в этой среде
+                        </p>
+                        <p className="text-[12px] text-white/30 mb-4 leading-relaxed">
+                          Функция записи требует прямого открытия в браузере на вашем ПК.
+                        </p>
+                        <button
+                          onClick={() => setMode("file")}
+                          className="text-[13px] text-white/60 hover:text-white/80 underline underline-offset-2 transition-colors"
+                        >
+                          Перейти к загрузке файла →
+                        </button>
+                      </div>
+                    )}
+
                     {status !== "recording" ? (
                       <>
                         <button
                           onClick={startRecording}
-                          className="w-20 h-20 rounded-full bg-white/[0.06] hover:bg-white/[0.09] border border-white/[0.08] flex items-center justify-center transition-all duration-200 mb-6 group"
+                          disabled={!navigator.mediaDevices?.getUserMedia}
+                          className={cn(
+                            "w-20 h-20 rounded-full border flex items-center justify-center transition-all duration-200 mb-6 group",
+                            navigator.mediaDevices?.getUserMedia
+                              ? "bg-white/[0.06] hover:bg-white/[0.09] border-white/[0.08]"
+                              : "bg-white/[0.02] border-white/[0.04] opacity-40 cursor-not-allowed"
+                          )}
                         >
                           <Mic className="w-7 h-7 text-white/40 group-hover:text-white/60 transition-colors" />
                         </button>

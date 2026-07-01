@@ -1,0 +1,698 @@
+     1→     1→"use client";
+     2→     2→
+     3→     3→import React, { useState, useCallback, useRef, useEffect } from "react";
+     4→     4→import { motion } from "framer-motion";
+     5→     5→import {
+     6→     6→  Upload,
+     7→     7→  Mic,
+     8→     8→  Download,
+     9→     9→  Copy,
+    10→    10→  Check,
+    11→    11→  Square,
+    12→    12→  Trash2,
+    13→    13→  FileAudio,
+    14→    14→  Clock,
+    15→    15→  Type,
+    16→    16→  AlertCircle,
+    17→    17→  X,
+    18→    18→  ArrowDownToLine,
+    19→    19→} from "lucide-react";
+    20→    20→import { Button } from "@/components/ui/button";
+    21→    21→import { Badge } from "@/components/ui/badge";
+    22→    22→import { ScrollArea } from "@/components/ui/scroll-area";
+    23→    23→import {
+    24→    24→  Tooltip,
+    25→    25→  TooltipContent,
+    26→    26→  TooltipProvider,
+    27→    27→  TooltipTrigger,
+    28→    28→} from "@/components/ui/tooltip";
+    29→    29→import { useToast } from "@/hooks/use-toast";
+    30→    30→import { cn } from "@/lib/utils";
+    31→    31→
+    32→    32→/* ------------------------------------------------------------------ */
+    33→    33→/*  Types                                                              */
+    34→    34→/* ------------------------------------------------------------------ */
+    35→    35→
+    36→    36→interface TranscriptionResult {
+    37→    37→  success: boolean;
+    38→    38→  transcription: string;
+    39→    39→  wordCount: number;
+    40→    40→  charCount?: number;
+    41→    41→  processingTime: number;
+    42→    42→  fileName: string;
+    43→    43→  fileSize: number;
+    44→    44→  audioDuration?: number;
+    45→    45→  chunksProcessed?: number;
+    46→    46→  error?: string;
+    47→    47→  message?: string;
+    48→    48→}
+    49→    49→
+    50→    50→type Status = "idle" | "recording" | "processing" | "done" | "error";
+    51→    51→
+    52→    52→/* ------------------------------------------------------------------ */
+    53→    53→/*  Helpers                                                            */
+    54→    54→/* ------------------------------------------------------------------ */
+    55→    55→
+    56→    56→function fmtSize(b: number) {
+    57→    57→  if (b === 0) return "0 Б";
+    58→    58→  const k = 1024;
+    59→    59→  const u = ["Б", "КБ", "МБ", "ГБ"];
+    60→    60→  const i = Math.floor(Math.log(b) / Math.log(k));
+    61→    61→  return `${(b / Math.pow(k, i)).toFixed(1)} ${u[i]}`;
+    62→    62→}
+    63→    63→
+    64→    64→function fmtTime(ms: number) {
+    65→    65→  if (ms < 1000) return `${ms} мс`;
+    66→    66→  return `${(ms / 1000).toFixed(1)} с`;
+    67→    67→}
+    68→    68→
+    69→    69→function fmtTimer(sec: number) {
+    70→    70→  const m = String(Math.floor(sec / 60)).padStart(2, "0");
+    71→    71→  const s = String(sec % 60).padStart(2, "0");
+    72→    72→  return `${m}:${s}`;
+    73→    73→}
+    74→    74→
+    75→    75→/* ------------------------------------------------------------------ */
+    76→    76→/*  Audio Level Meter (Web Audio API)                                  */
+    77→    77→/* ------------------------------------------------------------------ */
+    78→    78→
+    79→    79→function useAudioLevel(stream: MediaStream | null) {
+    80→    80→  const [level, setLevel] = useState(0);
+    81→    81→  const ctxRef = useRef<AudioContext | null>(null);
+    82→    82→  const analyserRef = useRef<AnalyserNode | null>(null);
+    83→    83→  const rafRef = useRef<number>(0);
+    84→    84→  const dataArrayRef = useRef<Uint8Array | null>(null);
+    85→    85→
+    86→    86→  useEffect(() => {
+    87→    87→    if (!stream) {
+    88→    88→      return;
+    89→    89→    }
+    90→    90→
+    91→    91→    const ctx = new AudioContext();
+    92→    92→    const source = ctx.createMediaStreamSource(stream);
+    93→    93→    const analyser = ctx.createAnalyser();
+    94→    94→    analyser.fftSize = 256;
+    95→    95→    source.connect(analyser);
+    96→    96→    ctxRef.current = ctx;
+    97→    97→    analyserRef.current = analyser;
+    98→    98→    dataArrayRef.current = new Uint8Array(analyser.frequencyBinCount);
+    99→    99→
+   100→   100→    const tick = () => {
+   101→   101→      if (!analyserRef.current || !dataArrayRef.current) return;
+   102→   102→      analyserRef.current.getByteFrequencyData(dataArrayRef.current);
+   103→   103→      const avg = dataArrayRef.current.reduce((a, b) => a + b, 0) / dataArrayRef.current.length;
+   104→   104→      setLevel(avg / 255);
+   105→   105→      rafRef.current = requestAnimationFrame(tick);
+   106→   106→    };
+   107→   107→    rafRef.current = requestAnimationFrame(tick);
+   108→   108→
+   109→   109→    return () => {
+   110→   110→      cancelAnimationFrame(rafRef.current);
+   111→   111→      ctx.close();
+   112→   112→    };
+   113→   113→  }, [stream]);
+   114→   114→
+   115→   115→  return level;
+   116→   116→}
+   117→   117→
+   118→   118→/* ------------------------------------------------------------------ */
+   119→   119→/*  Level Bars Component                                               */
+   120→   120→/* ------------------------------------------------------------------ */
+   121→   121→
+   122→   122→function LevelBars({ level }: { level: number }) {
+   123→   123→  const barCount = 32;
+   124→   124→  const bars = Array.from({ length: barCount }, (_, i) => {
+   125→   125→    // center-weighted distribution — middle bars are taller
+   126→   126→    const center = barCount / 2;
+   127→   127→    const dist = Math.abs(i - center) / center;
+   128→   128→    const height = Math.max(2, level * (1 - dist * 0.6) * 100);
+   129→   129→    return height;
+   130→   130→  });
+   131→   131→
+   132→   132→  return (
+   133→   133→    <div className="flex items-end justify-center gap-[2px] h-10">
+   134→   134→      {bars.map((h, i) => (
+   135→   135→        <div
+   136→   136→          key={i}
+   137→   137→          className="w-[3px] rounded-full transition-[height] duration-75"
+   138→   138→          style={{
+   139→   139→            height: `${h}%`,
+   140→   140→            backgroundColor: h > 60
+   141→   141→              ? "rgba(239, 68, 68, 0.8)"
+   142→   142→              : "rgba(255, 255, 255, 0.2)",
+   143→   143→          }}
+   144→   144→        />
+   145→   145→      ))}
+   146→   146→    </div>
+   147→   147→  );
+   148→   148→}
+   149→   149→
+   150→   150→/* ------------------------------------------------------------------ */
+   151→   151→/*  Page                                                               */
+   152→   152→/* ------------------------------------------------------------------ */
+   153→   153→
+   154→   154→export default function VoxPage() {
+   155→   155→  const [mode, setMode] = useState<"file" | "record">("file");
+   156→   156→  const [file, setFile] = useState<File | null>(null);
+   157→   157→  const [status, setStatus] = useState<Status>("idle");
+   158→   158→  const [result, setResult] = useState<TranscriptionResult | null>(null);
+   159→   159→  const [editableText, setEditableText] = useState("");
+   160→   160→  const [copied, setCopied] = useState(false);
+   161→   161→  const [isDragging, setIsDragging] = useState(false);
+   162→   162→
+   163→   163→  // Recording
+   164→   164→  const [recSeconds, setRecSeconds] = useState(0);
+   165→   165→  const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
+   166→   166→  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
+   167→   167→  const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
+   168→   168→  const audioLevel = useAudioLevel(mediaStream);
+   169→   169→
+   170→   170→  const fileInputRef = useRef<HTMLInputElement>(null);
+   171→   171→  const timerRef = useRef<ReturnType<typeof setInterval>>();
+   172→   172→  const silenceTimerRef = useRef<ReturnType<typeof setTimeout>>();
+   173→   173→  const { toast } = useToast();
+   174→   174→
+   175→   175→  const isProcessing = status === "processing";
+   176→   176→
+   177→   177→  /* ---- file handling ---- */
+   178→   178→
+   179→   179→  const acceptFile = useCallback(
+   180→   180→    (f: File) => {
+   181→   181→      const ok = [".mp3", ".wav", ".m4a", ".flac", ".ogg", ".webm"];
+   182→   182→      const ext = f.name.toLowerCase().slice(f.name.lastIndexOf("."));
+   183→   183→      if (!ok.includes(ext)) {
+   184→   184→        toast({ title: "Неподдерживаемый формат", description: ext, variant: "destructive" });
+   185→   185→        return;
+   186→   186→      }
+   187→   187→      if (f.size / 1024 / 1024 > 100) {
+   188→   188→        toast({ title: "Слишком большой файл", variant: "destructive" });
+   189→   189→        return;
+   190→   190→      }
+   191→   191→      setFile(f);
+   192→   192→      setResult(null);
+   193→   193→      setEditableText("");
+   194→   194→      setStatus("idle");
+   195→   195→      setRecordedBlob(null);
+   196→   196→    },
+   197→   197→    [toast]
+   198→   198→  );
+   199→   199→
+   200→   200→  const onDrop = useCallback(
+   201→   201→    (e: React.DragEvent) => { e.preventDefault(); setIsDragging(false); if (e.dataTransfer.files[0]) acceptFile(e.dataTransfer.files[0]); },
+   202→   202→    [acceptFile]
+   203→   203→  );
+   204→   204→  const onDragOver = useCallback((e: React.DragEvent) => { e.preventDefault(); setIsDragging(true); }, []);
+   205→   205→  const onDragLeave = useCallback((e: React.DragEvent) => { e.preventDefault(); setIsDragging(false); }, []);
+   206→   206→  const onFileChange = useCallback(
+   207→   207→    (e: React.ChangeEvent<HTMLInputElement>) => { if (e.target.files?.[0]) acceptFile(e.target.files[0]); },
+   208→   208→    [acceptFile]
+   209→   209→  );
+   210→   210→
+   211→   211→  /* ---- recording ---- */
+   212→   212→
+   213→   213→  const cleanupRecording = useCallback(() => {
+   214→   214→    clearInterval(timerRef.current);
+   215→   215→    clearTimeout(silenceTimerRef.current);
+   216→   216→    mediaStream?.getTracks().forEach((t) => t.stop());
+   217→   217→    setMediaStream(null);
+   218→   218→    setMediaRecorder(null);
+   219→   219→  }, [mediaStream]);
+   220→   220→
+   221→   221→  const stopRecording = useCallback(() => {
+   222→   222→    if (mediaRecorder && mediaRecorder.state !== "inactive") {
+   223→   223→      mediaRecorder.stop();
+   224→   224→    }
+   225→   225→    clearInterval(timerRef.current);
+   226→   226→    clearTimeout(silenceTimerRef.current);
+   227→   227→    setMediaRecorder(null);
+   228→   228→    setStatus("idle");
+   229→   229→    setFile(null);
+   230→   230→    setResult(null);
+   231→   231→    setEditableText("");
+   232→   232→  }, [mediaRecorder]);
+   233→   233→
+   234→   234→  const startRecording = async () => {
+   235→   235→    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+   236→   236→      toast({
+   237→   237→        title: "Микрофон недоступен",
+   238→   238→        description: "Запись голоса работает только в обычном браузере на ПК. Загрузите аудиофайл через вкладку «Файл».",
+   239→   239→        variant: "destructive",
+   240→   240→      });
+   241→   241→      return;
+   242→   242→    }
+   243→   243→
+   244→   244→    try {
+   245→   245→      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+   246→   246→      setMediaStream(stream);
+   247→   247→
+   248→   248→      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+   249→   249→        ? "audio/webm;codecs=opus"
+   250→   250→        : "audio/webm";
+   251→   251→
+   252→   252→      const rec = new MediaRecorder(stream, { mimeType });
+   253→   253→      const parts: BlobPart[] = [];
+   254→   254→      rec.ondataavailable = (e) => { if (e.data.size > 0) parts.push(e.data); };
+   255→   255→      rec.onstop = () => {
+   256→   256→        if (parts.length === 0) {
+   257→   257→          toast({ title: "Запись пуста", variant: "destructive" });
+   258→   258→          return;
+   259→   259→        }
+   260→   260→        const blob = new Blob(parts, { type: mimeType });
+   261→   261→        setRecordedBlob(blob);
+   262→   262→        stream.getTracks().forEach((t) => t.stop());
+   263→   263→        setMediaStream(null);
+   264→   264→      };
+   265→   265→
+   266→   266→      rec.start(250);
+   267→   267→      setMediaRecorder(rec);
+   268→   268→      setRecSeconds(0);
+   269→   269→      setStatus("recording");
+   270→   270→
+   271→   271→      timerRef.current = setInterval(() => setRecSeconds((p) => p + 1), 1000);
+   272→   272→
+   273→   273→      // Auto-detect silence: if level stays at 0 for 3s, mic isn't working
+   274→   274→      silenceTimerRef.current = setTimeout(() => {
+   275→   275→        // will be checked in the effect below
+   276→   276→      }, 3000);
+   277→   277→    } catch (err) {
+   278→   278→      const msg = err instanceof DOMException && err.name === "NotAllowedError"
+   279→   279→        ? "Разрешите доступ к микрофону в адресной строке браузера"
+   280→   280→        : "Не удалось получить доступ к микрофону. Попробуйте вкладку «Файл».";
+   281→   281→      toast({ title: "Микрофон недоступен", description: msg, variant: "destructive" });
+   282→   282→    }
+   283→   283→  };
+   284→   284→
+   285→   285→  // Detect persistent silence during recording
+   286→   286→  useEffect(() => {
+   287→   287→    if (status !== "recording" || recSeconds < 3) return;
+   288→   288→
+   289→   289→    // Check every second after 3s — if level is always near 0, mic is dead
+   290→   290→    const check = setInterval(() => {
+   291→   291→      if (audioLevel < 0.01 && recSeconds >= 3) {
+   292→   292→        clearInterval(check);
+   293→   293→        stopRecording();
+   294→   294→        toast({
+   295→   295→          title: "Микрофон не захватывает звук",
+   296→   296→          description: "Возможно, вы находитесь в ограниченной среде (iframe). Запись работает только при открытии приложения в обычном браузере на ПК. Используйте вкладку «Файл» для загрузки аудио.",
+   297→   297→          variant: "destructive",
+   298→   298→          duration: 6000,
+   299→   299→        });
+   300→   300→      }
+   301→   301→    }, 1000);
+   302→   302→
+   303→   303→    return () => clearInterval(check);
+   304→   304→  }, [status, recSeconds, audioLevel, stopRecording]);
+   305→   305→
+   306→   306→  useEffect(() => {
+   307→   307→    return () => cleanupRecording();
+   308→   308→  }, [cleanupRecording]);
+   309→   309→
+   310→   310→  /* ---- transcribe ---- */
+   311→   311→
+   312→   312→  const handleTranscribe = async () => {
+   313→   313→    setStatus("processing");
+   314→   314→    try {
+   315→   315→      const formData = new FormData();
+   316→   316→      if (recordedBlob) {
+   317→   317→        formData.append("audio", recordedBlob, "recording.webm");
+   318→   318→      } else if (file) {
+   319→   319→        formData.append("audio", file);
+   320→   320→      }
+   321→   321→      const res = await fetch("/api/transcribe", { method: "POST", body: formData });
+   322→   322→      const data: TranscriptionResult = await res.json();
+   323→   323→      if (!res.ok) throw new Error(data.error || "Ошибка сервера");
+   324→   324→      setResult(data);
+   325→   325→      setEditableText(data.transcription);
+   326→   326→      setStatus("done");
+   327→   327→      if (data.message) {
+   328→   328→        toast({ title: "Внимание", description: data.message });
+   329→   329→      } else {
+   330→   330→        toast({ title: "Готово", description: `${data.wordCount} слов за ${fmtTime(data.processingTime)}` });
+   331→   331→      }
+   332→   332→    } catch (err) {
+   333→   333→      setStatus("error");
+   334→   334→      toast({ title: "Ошибка", description: err instanceof Error ? err.message : "Не удалось распознать", variant: "destructive" });
+   335→   335→    }
+   336→   336→  };
+   337→   337→
+   338→   338→  /* ---- export ---- */
+   339→   339→
+   340→   340→  const exportDocx = async () => {
+   341→   341→    if (!editableText.trim()) return;
+   342→   342→    try {
+   343→   343→      const res = await fetch("/api/export-docx", {
+   344→   344→        method: "POST",
+   345→   345→        headers: { "Content-Type": "application/json" },
+   346→   346→        body: JSON.stringify({ text: editableText, fileName: file?.name || recordedBlob ? "запись" : "transcription" }),
+   347→   347→      });
+   348→   348→      if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
+   349→   349→      const blob = await res.blob();
+   350→   350→      const url = URL.createObjectURL(blob);
+   351→   351→      const a = document.createElement("a");
+   352→   352→      a.href = url;
+   353→   353→      const base = (file?.name || "transcription").replace(/\.[^.]+$/, "");
+   354→   354→      a.download = `${base}_расшифровка.docx`;
+   355→   355→      document.body.appendChild(a);
+   356→   356→      a.click();
+   357→   357→      a.remove();
+   358→   358→      URL.revokeObjectURL(url);
+   359→   359→      toast({ title: "Документ скачан" });
+   360→   360→    } catch (err) {
+   361→   361→      toast({ title: "Ошибка экспорта", description: err instanceof Error ? err.message : "", variant: "destructive" });
+   362→   362→    }
+   363→   363→  };
+   364→   364→
+   365→   365→  const copyText = async () => {
+   366→   366→    try {
+   367→   367→      await navigator.clipboard.writeText(editableText);
+   368→   368→      setCopied(true);
+   369→   369→      toast({ title: "Скопировано" });
+   370→   370→      setTimeout(() => setCopied(false), 2000);
+   371→   371→    } catch {
+   372→   372→      toast({ title: "Ошибка копирования", variant: "destructive" });
+   373→   373→    }
+   374→   374→  };
+   375→   375→
+   376→   376→  const clearAll = () => {
+   377→   377→    cleanupRecording();
+   378→   378→    setFile(null);
+   379→   379→    setRecordedBlob(null);
+   380→   380→    setResult(null);
+   381→   381→    setEditableText("");
+   382→   382→    setStatus("idle");
+   383→   383→    setRecSeconds(0);
+   384→   384→    if (fileInputRef.current) fileInputRef.current.value = "";
+   385→   385→  };
+   386→   386→
+   387→   387→  const hasSource = !!file || !!recordedBlob;
+   388→   388→
+   389→   389→  /* ================================================================ */
+   390→   390→  return (
+   391→   391→    <TooltipProvider delayDuration={300}>
+   392→   392→      <div className="min-h-screen flex flex-col bg-[#09090b] text-[#fafafa]">
+   393→   393→        {/* ---------- HEADER ---------- */}
+   394→   394→        <header className="border-b border-white/[0.06]">
+   395→   395→          <div className="max-w-3xl mx-auto px-5 h-14 flex items-center justify-between">
+   396→   396→            <div className="flex items-center gap-2.5">
+   397→   397→              <div className="w-7 h-7 rounded-lg bg-white/[0.07] flex items-center justify-center">
+   398→   398→                <Mic className="w-3.5 h-3.5 text-white/60" />
+   399→   399→              </div>
+   400→   400→              <span className="text-[15px] font-semibold tracking-tight">Vox</span>
+   401→   401→            </div>
+   402→   402→            <span className="text-[11px] text-white/25 font-mono">расшифровка голоса</span>
+   403→   403→          </div>
+   404→   404→        </header>
+   405→   405→
+   406→   406→        {/* ---------- MAIN ---------- */}
+   407→   407→        <main className="flex-1 flex items-start justify-center px-5 py-10 sm:py-16">
+   408→   408→          <div className="w-full max-w-3xl">
+   409→   409→
+   410→   410→            {/* === Input Section === */}
+   411→   411→            {!result && status !== "done" && (
+   412→   412→              <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }}>
+   413→   413→                {/* Mode Tabs */}
+   414→   414→                <div className="flex gap-1 p-1 bg-white/[0.04] rounded-lg w-fit mb-6">
+   415→   415→                  {(["file", "record"] as const).map((m) => (
+   416→   416→                    <button
+   417→   417→                      key={m}
+   418→   418→                      onClick={() => { setMode(m); clearAll(); }}
+   419→   419→                      className={cn(
+   420→   420→                        "px-4 py-1.5 text-[13px] rounded-md transition-all",
+   421→   421→                        mode === m
+   422→   422→                          ? "bg-white/[0.08] text-white/90 font-medium shadow-sm"
+   423→   423→                          : "text-white/35 hover:text-white/55"
+   424→   424→                      )}
+   425→   425→                    >
+   426→   426→                      {m === "file" ? "Файл" : "Запись"}
+   427→   427→                    </button>
+   428→   428→                  ))}
+   429→   429→                </div>
+   430→   430→
+   431→   431→                {/* ---- FILE MODE ---- */}
+   432→   432→                {mode === "file" && (
+   433→   433→                  <div
+   434→   434→                    onDrop={onDrop}
+   435→   435→                    onDragOver={onDragOver}
+   436→   436→                    onDragLeave={onDragLeave}
+   437→   437→                    onClick={() => fileInputRef.current?.click()}
+   438→   438→                    className={cn(
+   439→   439→                      "relative cursor-pointer rounded-xl border-2 border-dashed transition-colors duration-200",
+   440→   440→                      isDragging
+   441→   441→                        ? "border-white/20 bg-white/[0.03]"
+   442→   442→                        : "border-white/[0.08] hover:border-white/15"
+   443→   443→                    )}
+   444→   444→                  >
+   445→   445→                    <div className="flex flex-col items-center py-16 sm:py-20 px-6">
+   446→   446→                      <div className="w-12 h-12 rounded-2xl bg-white/[0.05] flex items-center justify-center mb-5">
+   447→   447→                        <ArrowDownToLine className="w-5 h-5 text-white/30" />
+   448→   448→                      </div>
+   449→   449→                      <p className="text-[15px] font-medium text-white/70 mb-1">
+   450→   450→                        {isDragging ? "Отпустите файл" : "Перетащите аудиофайл"}
+   451→   451→                      </p>
+   452→   452→                      <p className="text-[13px] text-white/25 mb-6">или нажмите для выбора</p>
+   453→   453→                      <div className="flex gap-1.5">
+   454→   454→                        {["MP3", "WAV", "M4A", "FLAC", "OGG", "WebM"].map((f) => (
+   455→   455→                          <span key={f} className="text-[10px] font-mono text-white/15 bg-white/[0.04] px-2 py-0.5 rounded">
+   456→   456→                            {f}
+   457→   457→                          </span>
+   458→   458→                        ))}
+   459→   459→                      </div>
+   460→   460→                    </div>
+   461→   461→                    <input
+   462→   462→                      ref={fileInputRef}
+   463→   463→                      type="file"
+   464→   464→                      accept="audio/*,.mp3,.wav,.m4a,.flac,.ogg,.webm"
+   465→   465→                      className="hidden"
+   466→   466→                      onChange={onFileChange}
+   467→   467→                    />
+   468→   468→                  </div>
+   469→   469→                )}
+   470→   470→
+   471→   471→                {/* ---- RECORD MODE ---- */}
+   472→   472→                {mode === "record" && (
+   473→   473→                  <div className="flex flex-col items-center py-12 sm:py-16">
+   474→   474→                    {status !== "recording" ? (
+   475→   475→                      <>
+   476→   476→                        <button
+   477→   477→                          onClick={startRecording}
+   478→   478→                          className="w-20 h-20 rounded-full bg-white/[0.06] hover:bg-white/[0.09] border border-white/[0.08] flex items-center justify-center transition-all duration-200 mb-6 group"
+   479→   479→                        >
+   480→   480→                          <Mic className="w-7 h-7 text-white/40 group-hover:text-white/60 transition-colors" />
+   481→   481→                        </button>
+   482→   482→                        <p className="text-[15px] font-medium text-white/50 mb-1">Нажмите для записи</p>
+   483→   483→                        <p className="text-[13px] text-white/20 max-w-xs text-center leading-relaxed">
+   484→   484→                          Голос записывается в браузере, затем отправляется на обработку
+   485→   485→                        </p>
+   486→   486→                        <p className="text-[11px] text-white/10 mt-3">
+   487→   487→                          Требуется доступ к микрофону
+   488→   488→                        </p>
+   489→   489→                      </>
+   490→   490→                    ) : (
+   491→   491→                      <>
+   492→   492→                        <button
+   493→   493→                          onClick={stopRecording}
+   494→   494→                          className="w-20 h-20 rounded-full bg-red-500/10 border-2 border-red-500/30 flex items-center justify-center mb-5 transition-all hover:bg-red-500/20"
+   495→   495→                        >
+   496→   496→                          <Square className="w-6 h-6 text-red-400 fill-red-400" />
+   497→   497→                        </button>
+   498→   498→                        <p className="text-2xl font-mono font-light text-white/70 tabular-nums mb-3">
+   499→   499→                          {fmtTimer(recSeconds)}
+   500→   500→                        </p>
+   501→   501→                        {/* Audio level meter */}
+   502→   502→                        <div className="w-full max-w-xs mb-3">
+   503→   503→                          <LevelBars level={audioLevel} />
+   504→   504→                        </div>
+   505→   505→                        <p className="text-[13px] text-red-400/70 mb-1">Запись идёт — нажмите для остановки</p>
+   506→   506→                        <p className="text-[11px] text-white/15">
+   507→   507→                          {audioLevel < 0.01
+   508→   508→                            ? "Микрофон не фиксирует звук..."
+   509→   509→                            : "Говорите в микрофон"}
+   510→   510→                        </p>
+   511→   511→                      </>
+   512→   512→                    )}
+   513→   513→                  </div>
+   514→   514→                )}
+   515→   515→
+   516→   516→                {/* ---- Source Selected (idle, ready to transcribe) ---- */}
+   517→   517→                {hasSource && status === "idle" && (
+   518→   518→                  <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mt-5">
+   519→   519→                    <div className="flex items-center justify-between rounded-xl bg-white/[0.04] border border-white/[0.06] px-4 py-3 mb-4">
+   520→   520→                      <div className="flex items-center gap-3 min-w-0">
+   521→   521→                        <FileAudio className="w-4 h-4 text-white/25 shrink-0" />
+   522→   522→                        <div className="min-w-0">
+   523→   523→                          <p className="text-[13px] text-white/70 truncate">
+   524→   524→                            {recordedBlob ? `Запись (${fmtTimer(recSeconds)})` : file?.name}
+   525→   525→                          </p>
+   526→   526→                          {file && <p className="text-[11px] text-white/25">{fmtSize(file.size)}</p>}
+   527→   527→                          {recordedBlob && <p className="text-[11px] text-white/25">{fmtSize(recordedBlob.size)}</p>}
+   528→   528→                        </div>
+   529→   529→                      </div>
+   530→   530→                      <div className="flex items-center gap-1 shrink-0">
+   531→   531→                        {recordedBlob && (
+   532→   532→                          <Badge variant="outline" className="border-white/10 text-white/30 text-[10px] font-mono mr-1">
+   533→   533→                            WebM
+   534→   534→                          </Badge>
+   535→   535→                        )}
+   536→   536→                        <button
+   537→   537→                          onClick={(e) => { e.stopPropagation(); clearAll(); }}
+   538→   538→                          className="p-1.5 rounded-md text-white/20 hover:text-white/50 hover:bg-white/[0.06] transition-colors"
+   539→   539→                        >
+   540→   540→                          <X className="w-3.5 h-3.5" />
+   541→   541→                        </button>
+   542→   542→                      </div>
+   543→   543→                    </div>
+   544→   544→                    <Button
+   545→   545→                      onClick={handleTranscribe}
+   546→   546→                      className="w-full h-11 bg-white text-[#09090b] font-medium text-[14px] rounded-xl hover:bg-white/90 transition-colors"
+   547→   547→                    >
+   548→   548→                      Распознать
+   549→   549→                    </Button>
+   550→   550→                  </motion.div>
+   551→   551→                )}
+   552→   552→
+   553→   553→                {/* ---- Processing ---- */}
+   554→   554→                {isProcessing && (
+   555→   555→                  <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mt-5">
+   556→   556→                    <div className="rounded-xl bg-white/[0.04] border border-white/[0.06] p-8 flex flex-col items-center">
+   557→   557→                      <div className="flex items-center gap-3 mb-4">
+   558→   558→                        <div className="w-2 h-2 rounded-full bg-white/30 animate-pulse" />
+   559→   559→                        <span className="text-[14px] text-white/50">Обработка аудио</span>
+   560→   560→                      </div>
+   561→   561→                      <p className="text-[12px] text-white/20">Это может занять некоторое время</p>
+   562→   562→                    </div>
+   563→   563→                  </motion.div>
+   564→   564→                )}
+   565→   565→
+   566→   566→                {/* ---- Error ---- */}
+   567→   567→                {status === "error" && (
+   568→   568→                  <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mt-5">
+   569→   569→                    <div className="rounded-xl bg-red-500/[0.06] border border-red-500/15 p-6 flex flex-col items-center text-center">
+   570→   570→                      <AlertCircle className="w-5 h-5 text-red-400/60 mb-3" />
+   571→   571→                      <p className="text-[13px] text-white/50 mb-4">Произошла ошибка при обработке</p>
+   572→   572→                      <div className="flex gap-2">
+   573→   573→                        <Button onClick={handleTranscribe} variant="outline" size="sm" className="border-white/10 text-white/50 text-[13px] rounded-lg h-9">
+   574→   574→                          Повторить
+   575→   575→                        </Button>
+   576→   576→                        <Button onClick={clearAll} variant="ghost" size="sm" className="text-white/30 text-[13px] rounded-lg h-9">
+   577→   577→                          Сбросить
+   578→   578→                        </Button>
+   579→   579→                      </div>
+   580→   580→                    </div>
+   581→   581→                  </motion.div>
+   582→   582→                )}
+   583→   583→              </motion.div>
+   584→   584→            )}
+   585→   585→
+   586→   586→            {/* === Result Section === */}
+   587→   587→            {(status === "done" && result) && (
+   588→   588→              <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }} className="space-y-4">
+   589→   589→                <div className="flex items-center justify-between">
+   590→   590→                  <button onClick={clearAll} className="text-[13px] text-white/30 hover:text-white/50 transition-colors flex items-center gap-1.5">
+   591→   591→                    <Upload className="w-3.5 h-3.5" />
+   592→   592→                    Новый файл
+   593→   593→                  </button>
+   594→   594→                  <div className="flex items-center gap-3 text-[11px] text-white/20 font-mono">
+   595→   595→                    <span>{result.wordCount} сл.</span>
+   596→   596→                    <span className="w-px h-3 bg-white/10" />
+   597→   597→                    <span>{fmtTime(result.processingTime)}</span>
+   598→   598→                    {result.chunksProcessed && result.chunksProcessed > 1 && (
+   599→   599→                      <>
+   600→   600→                        <span className="w-px h-3 bg-white/10" />
+   601→   601→                        <span>{result.chunksProcessed} чанков</span>
+   602→   602→                      </>
+   603→   603→                    )}
+   604→   604→                  </div>
+   605→   605→                </div>
+   606→   606→
+   607→   607→                <div className={cn("grid gap-3", result.audioDuration != null ? "grid-cols-4" : "grid-cols-3")}>
+   608→   608→                  {[
+   609→   609→                    { icon: Type, label: "Символов", value: (result.charCount || editableText.length).toString() },
+   610→   610→                    { icon: Clock, label: "Обработка", value: fmtTime(result.processingTime) },
+   611→   611→                    { icon: FileAudio, label: "Размер", value: fmtSize(result.fileSize) },
+   612→   612→                    ...(result.audioDuration != null ? [{ icon: Clock, label: "Длительность", value: `${result.audioDuration.toFixed(0)}с` }] : []),
+   613→   613→                  ].map((s) => (
+   614→   614→                    <div key={s.label} className="rounded-lg bg-white/[0.03] border border-white/[0.05] px-3.5 py-3">
+   615→   615→                      <div className="flex items-center gap-1.5 mb-1">
+   616→   616→                        <s.icon className="w-3 h-3 text-white/15" />
+   617→   617→                        <span className="text-[10px] text-white/20 uppercase tracking-wider">{s.label}</span>
+   618→   618→                      </div>
+   619→   619→                      <p className="text-[15px] font-medium font-mono text-white/70">{s.value}</p>
+   620→   620→                    </div>
+   621→   621→                  ))}
+   622→   622→                </div>
+   623→   623→
+   624→   624→                <div className="rounded-xl bg-white/[0.03] border border-white/[0.06] overflow-hidden">
+   625→   625→                  <div className="flex items-center justify-between px-4 h-10 border-b border-white/[0.06]">
+   626→   626→                    <div className="flex items-center gap-2">
+   627→   627→                      <div className="flex gap-1">
+   628→   628→                        <div className="w-2.5 h-2.5 rounded-full bg-white/[0.06]" />
+   629→   629→                        <div className="w-2.5 h-2.5 rounded-full bg-white/[0.06]" />
+   630→   630→                        <div className="w-2.5 h-2.5 rounded-full bg-white/[0.06]" />
+   631→   631→                      </div>
+   632→   632→                      <span className="text-[11px] text-white/15 font-mono ml-2">расшифровка</span>
+   633→   633→                    </div>
+   634→   634→                    <div className="flex items-center gap-0.5">
+   635→   635→                      <Tooltip>
+   636→   636→                        <TooltipTrigger asChild>
+   637→   637→                          <button onClick={copyText} className="p-1.5 rounded-md text-white/20 hover:text-white/50 hover:bg-white/[0.06] transition-colors">
+   638→   638→                            {copied ? <Check className="w-3.5 h-3.5 text-white/60" /> : <Copy className="w-3.5 h-3.5" />}
+   639→   639→                          </button>
+   640→   640→                        </TooltipTrigger>
+   641→   641→                        <TooltipContent><p>Копировать</p></TooltipContent>
+   642→   642→                      </Tooltip>
+   643→   643→                      <Tooltip>
+   644→   644→                        <TooltipTrigger asChild>
+   645→   645→                          <button onClick={() => setEditableText("")} className="p-1.5 rounded-md text-white/20 hover:text-white/50 hover:bg-white/[0.06] transition-colors">
+   646→   646→                            <Trash2 className="w-3.5 h-3.5" />
+   647→   647→                          </button>
+   648→   648→                        </TooltipTrigger>
+   649→   649→                        <TooltipContent><p>Очистить</p></TooltipContent>
+   650→   650→                      </Tooltip>
+   651→   651→                    </div>
+   652→   652→                  </div>
+   653→   653→                  <ScrollArea className="h-[320px] sm:h-[420px]">
+   654→   654→                    <textarea
+   655→   655→                      value={editableText}
+   656→   656→                      onChange={(e) => setEditableText(e.target.value)}
+   657→   657→                      className="w-full min-h-[320px] sm:min-h-[420px] p-5 bg-transparent text-[14px] leading-relaxed resize-none focus:outline-none text-white/75 placeholder:text-white/10"
+   658→   658→                      placeholder="Распознанный текст..."
+   659→   659→                      spellCheck={false}
+   660→   660→                    />
+   661→   661→                  </ScrollArea>
+   662→   662→                </div>
+   663→   663→
+   664→   664→                <div className="flex gap-3">
+   665→   665→                  <Button
+   666→   666→                    onClick={exportDocx}
+   667→   667→                    disabled={!editableText.trim()}
+   668→   668→                    className="flex-1 h-11 bg-white text-[#09090b] font-medium text-[14px] rounded-xl hover:bg-white/90 transition-colors disabled:opacity-20"
+   669→   669→                  >
+   670→   670→                    <Download className="w-4 h-4 mr-2" />
+   671→   671→                    Скачать .docx
+   672→   672→                  </Button>
+   673→   673→                  <Button
+   674→   674→                    onClick={copyText}
+   675→   675→                    disabled={!editableText.trim()}
+   676→   676→                    variant="outline"
+   677→   677→                    className="flex-1 h-11 border-white/10 text-white/50 text-[14px] rounded-xl hover:bg-white/[0.04] hover:text-white/70 transition-colors disabled:opacity-20"
+   678→   678→                  >
+   679→   679→                    {copied ? <Check className="w-4 h-4 mr-2" /> : <Copy className="w-4 h-4 mr-2" />}
+   680→   680→                    {copied ? "Скопировано" : "Копировать"}
+   681→   681→                  </Button>
+   682→   682→                </div>
+   683→   683→              </motion.div>
+   684→   684→            )}
+   685→   685→          </div>
+   686→   686→        </main>
+   687→   687→
+   688→   688→        {/* ---------- FOOTER ---------- */}
+   689→   689→        <footer className="border-t border-white/[0.06] mt-auto">
+   690→   690→          <div className="max-w-3xl mx-auto px-5 h-10 flex items-center justify-between">
+   691→   691→            <span className="text-[11px] text-white/15">Vox v1.0</span>
+   692→   692→            <span className="text-[11px] text-white/15">Русский язык</span>
+   693→   693→          </div>
+   694→   694→        </footer>
+   695→   695→      </div>
+   696→   696→    </TooltipProvider>
+   697→   697→  );
+   698→   698→}

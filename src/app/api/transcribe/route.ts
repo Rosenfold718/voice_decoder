@@ -94,7 +94,8 @@ async function transcribeFile(
 
   const response = await zai.audio.asr.create({
     file_base64: base64Audio,
-  });
+    language: "ru",
+  } as any);
 
   return response.text || "";
 }
