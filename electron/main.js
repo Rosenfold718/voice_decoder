@@ -133,6 +133,7 @@ async function convertToWav(inputPath, outputDir) {
   await execFileAsync(findFfmpeg(), [
     "-y", "-i", inputPath,
     "-ar", "16000", "-ac", "1", "-sample_fmt", "s16",
+    "-af", "lowpass=8000,highpass=80",  // remove noise outside speech range
     outputPath,
   ], { timeout: 120_000 });
   return outputPath;
@@ -154,11 +155,26 @@ async function runWhisper(wavPath, modelPath) {
       "-l", "ru",
       "-t", String(threads),
       "--no-timestamps",
+      "--beam-size", "5",
+      "--best-of", "5",
+      "--no-speech-thold", "0.6",
     ], {
       timeout: 1800_000,
       maxBuffer: 50 * 1024 * 1024,
     });
-    stdout = (result.stdout || "").trim();
+    // Filter out whisper status/info lines — keep only transcription text
+    const rawStdout = (result.stdout || "").trim();
+    const lines = rawStdout.split("\n").filter(line => {
+      const trimmed = line.trim();
+      if (!trimmed) return false;
+      // Skip whisper.cpp info lines (start with [), progress bars, etc.
+      if (trimmed.startsWith("[")) return false;
+      if (trimmed.startsWith("whisper")) return false;
+      if (/^\d+\/\d+/.test(trimmed)) return false;  // progress like 0/30
+      if (trimmed.includes("load_tensor") || trimmed.includes("ggml")) return false;
+      return true;
+    });
+    stdout = lines.join("\n").trim();
     stderr = result.stderr || "";
     console.log("[Vox] Whisper stdout:", stdout.substring(0, 200));
   } catch (err) {

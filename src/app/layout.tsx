@@ -3,8 +3,8 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 
 export const metadata: Metadata = {
-  title: "Vox — Расшифровка голоса",
-  description: "Загрузите аудиофайл или запишите голос — получите текст с экспортом в Word.",
+  title: "Vox — BETA",
+  description: "Загрузите аудиофайл — получите текст с экспортом в Word.",
   icons: {
     icon: "/logo.svg",
   },

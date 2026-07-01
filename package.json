@@ -47,7 +47,7 @@
       "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Vox — Расшифровка голоса"
+      "shortcutName": "Vox"
     }
   },
   "dependencies": {
