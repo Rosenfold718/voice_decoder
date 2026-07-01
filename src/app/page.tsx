@@ -591,7 +591,7 @@ export default function VoxPage() {
         {/* ---------- FOOTER ---------- */}
         <footer className="border-t border-white/[0.06] mt-auto">
           <div className="max-w-3xl mx-auto px-5 h-10 flex items-center justify-between">
-            <span className="text-[11px] text-white/15">Vox v1.0</span>
+            <span className="text-[11px] text-white/15">Vox v1.3.1</span>
             <span className="text-[11px] text-white/15">Русский язык</span>
           </div>
         </footer>
