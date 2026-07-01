@@ -18,7 +18,25 @@ Work Log:
 Stage Summary:
 - Приложение VOX DECODER полностью собрано и работает
 - 2 API-роута: /api/transcribe, /api/export-docx
-- Поддерживаемые форматы: MP3, WAV, M4A, FLAC, OGG, WebM
+- Поддерживаемые форматы (вход): MP3, WAV, M4A, FLAC, OGG, WebM
+- Автоконвертация MP3/M4A/FLAC/OGG → WAV 16kHz mono через ffmpeg перед отправкой в ASR
 - Экспорт в .docx с форматированием
 - Тёмный хай-тек интерфейс с анимациями
 - Готово к деплою в репозиторий
+
+---
+Task ID: 2
+Agent: main
+Task: Исправление ошибки 400 при загрузке MP3 — ASR SDK принимает только WAV и WebM
+
+Work Log:
+- Обнаружена ошибка: ASR SDK возвращает 400 для MP3 — "unsupported audio format: unknown, only WAV and WebM are supported"
+- Проверен ffmpeg на сервере — доступен (7.1.4)
+- Переписан `/api/transcribe/route.ts`: сохранение файла в tmpdir → конвертация через ffmpeg → base64 → ASR
+- Конвертация: 16kHz, mono, 16-bit PCM WAV (оптимально для ASR)
+- Добавлена очистка temp-директорий в finally-блоке
+- ESLint: 0 ошибок
+
+Stage Summary:
+- MP3 и другие форматы теперь автоматически конвертируются в WAV перед отправкой в ASR
+- Фронтенд не нужно менять — конвертация прозрачна для пользователя
