@@ -28,57 +28,67 @@ jobs:
       - name: Download whisper.cpp
         shell: pwsh
         run: |
-          # Get latest release URL for Windows x64 binary
           $releases = Invoke-RestMethod "https://api.github.com/repos/ggerganov/whisper.cpp/releases/latest"
           $asset = $releases.assets | Where-Object { $_.name -like "*bin*x64*" -and $_.name -like "*.zip" } | Select-Object -First 1
+          if (-not $asset) {
+            Write-Error "No suitable whisper.cpp release asset found"
+            exit 1
+          }
           Write-Host "Downloading whisper: $($asset.name) ($([math]::Round($asset.size/1MB, 1)) MB)"
           Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "whisper.zip" -UseBasicParsing
           Expand-Archive -Path "whisper.zip" -DestinationPath "whisper-temp" -Force
           New-Item -ItemType Directory -Force -Path "resources/whisper"
-          # Find the .exe (could be whisper.exe, main.exe, or whisper-cli.exe)
-          $exe = Get-ChildItem "whisper-temp" -Recurse -Filter "*.exe" | Where-Object { $_.Name -notlike "*upx*" } | Select-Object -First 1
+          # Find the main executable (whisper-cli.exe or main.exe)
+          $exe = Get-ChildItem "whisper-temp" -Recurse -Filter "*.exe" | Where-Object { $_.Name -notlike "*upx*" -and ($_.Name -eq "whisper-cli.exe" -or $_.Name -eq "main.exe" -or $_.Name -eq "whisper.exe") } | Select-Object -First 1
           if ($exe) {
-            Copy-Item $exe.FullName "resources\whisper\" -Force
-            Write-Host "Whisper binary: $($exe.Name)"
+            Copy-Item $exe.FullName "resources\whisper\whisper-cli.exe" -Force
+            Write-Host "Whisper binary: $($exe.Name) -> whisper-cli.exe"
           } else {
-            Write-Error "No whisper.exe found in archive"
+            Write-Error "No whisper executable found in archive"
+            Get-ChildItem "whisper-temp" -Recurse -Filter "*.exe" | ForEach-Object { Write-Host "  Found: $($_.FullName)" }
             exit 1
           }
 
-      - name: Download whisper model (small, ~500MB)
+      - name: Download whisper model (medium, ~1.5GB — best Russian accuracy)
         shell: pwsh
         run: |
-          $modelUrl = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin"
-          Write-Host "Downloading ggml-small.bin model..."
-          Invoke-WebRequest -Uri $modelUrl -OutFile "resources\whisper\ggml-small.bin" -UseBasicParsing
-          $size = (Get-Item "resources\whisper\ggml-small.bin").Length
-          Write-Host "Model size: $([math]::Round($size/1MB, 1)) MB"
+          $modelUrl = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin"
+          Write-Host "Downloading ggml-medium.bin model (this may take a few minutes)..."
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          Invoke-WebRequest -Uri $modelUrl -OutFile "resources\whisper\ggml-medium.bin" -UseBasicParsing
+          $size = (Get-Item "resources\whisper\ggml-medium.bin").Length
+          if ($size -lt 100MB) {
+            Write-Error "Model file too small ($([math]::Round($size/1MB, 1)) MB) — download may have failed"
+            exit 1
+          }
+          Write-Host "Model size: $([math]::Round($size/1MB, 0)) MB"
 
       - name: Download ffmpeg (Windows essentials build)
         shell: pwsh
         run: |
           $url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+          Write-Host "Downloading ffmpeg..."
           Invoke-WebRequest -Uri $url -OutFile "ffmpeg.zip" -UseBasicParsing
           Expand-Archive -Path "ffmpeg.zip" -DestinationPath "ffmpeg-temp" -Force
           $ffmpegRoot = Get-ChildItem "ffmpeg-temp" -Directory | Select-Object -First 1
           New-Item -ItemType Directory -Force -Path "resources/ffmpeg"
           Copy-Item "$($ffmpegRoot.FullName)\bin\ffmpeg.exe" "resources\ffmpeg\" -Force
           Copy-Item "$($ffmpegRoot.FullName)\bin\ffprobe.exe" "resources\ffmpeg\" -Force
-          & "resources\ffmpeg\ffmpeg.exe" -version
+          & "resources\ffmpeg\ffmpeg.exe" -version | Select-Object -First 1
           Write-Host "ffmpeg bundled"
 
       - name: Build Next.js static export
         run: npm run build
 
-      - name: Verify output
+      - name: Verify output structure
         shell: pwsh
         run: |
           Write-Host "=== out/ contents ==="
-          Test-Path "out\index.html"
+          if (Test-Path "out\index.html") { Write-Host "  index.html OK" } else { Write-Error "  index.html MISSING"; exit 1 }
           Write-Host "=== whisper ==="
-          Get-ChildItem "resources\whisper" | ForEach-Object { Write-Host $_.Name $_.Length }
+          Get-ChildItem "resources\whisper" | ForEach-Object { Write-Host "  $($_.Name) — $([math]::Round($_.Length/1MB, 1)) MB" }
           Write-Host "=== ffmpeg ==="
-          Get-ChildItem "resources\ffmpeg" | ForEach-Object { Write-Host $_.Name $_.Length }
+          Get-ChildItem "resources\ffmpeg" | ForEach-Object { Write-Host "  $($_.Name) — $([math]::Round($_.Length/1MB, 1)) MB" }
 
       - name: Build Electron .exe
         run: npx electron-builder --win --publish never
@@ -91,7 +101,7 @@ jobs:
             Write-Host "Installer: $($exe.Name) ($([math]::Round($exe.Length/1MB, 0)) MB)"
             echo "EXE_PATH=$($exe.FullName)" >> $env:GITHUB_ENV
           } else {
-            Write-Error "No .exe found"
+            Write-Error "No .exe installer found in dist-electron/"
             exit 1
           }
 

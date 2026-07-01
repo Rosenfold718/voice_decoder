@@ -401,12 +401,7 @@ export default function VoxPage() {
       if (window.electronAPI?.isElectron) {
         data = await window.electronAPI.transcribe(audioBase64, fileName);
       } else {
-        const formData = new FormData();
-        if (recordedBlob) formData.append("audio", recordedBlob, fileName);
-        else if (file) formData.append("audio", file);
-        const res = await fetch("/api/transcribe", { method: "POST", body: formData });
-        data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Ошибка сервера");
+        throw new Error("Распознавание доступно только в приложении Vox");
       }
 
       if (!data.success) throw new Error(data.error || "Ошибка распознавания");
@@ -435,23 +430,7 @@ export default function VoxPage() {
         await window.electronAPI.exportDocx(editableText, fName);
         toast({ title: "Документ сохранён" });
       } else {
-        const res = await fetch("/api/export-docx", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: editableText, fileName: fName }),
-        });
-        if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        const base = fName.replace(/\.[^.]+$/, "");
-        a.download = `${base}_расшифровка.docx`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-        toast({ title: "Документ скачан" });
+        throw new Error("Экспорт доступен только в приложении Vox");
       }
     } catch (err) {
       toast({ title: "Ошибка экспорта", description: err instanceof Error ? err.message : "", variant: "destructive" });

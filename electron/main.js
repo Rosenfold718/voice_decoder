@@ -1,5 +1,5 @@
 const { app, BrowserWindow, Menu, ipcMain, dialog } = require("electron");
-const { spawn, execFile } = require("child_process");
+const { execFile } = require("child_process");
 const { promisify } = require("util");
 const path = require("path");
 const fs = require("fs");
@@ -83,9 +83,9 @@ function startStaticServer() {
 /* ------------------------------------------------------------------ */
 function findWhisperExe() {
   const candidates = [
+    path.join(whisperDir, "whisper-cli.exe"),
     path.join(whisperDir, "whisper.exe"),
     path.join(whisperDir, "main.exe"),
-    path.join(whisperDir, "whisper-cli.exe"),
   ];
   for (const p of candidates) {
     if (fs.existsSync(p)) return p;
@@ -139,15 +139,21 @@ async function runWhisper(wavPath, modelPath) {
 
   const baseName = path.basename(wavPath, ".wav");
 
+  // Use all available CPU threads for faster processing
+  const numCpus = require('os').cpus().length;
+  const threads = Math.max(1, Math.min(numCpus, 8));
+  console.log(`[Vox] Whisper: using ${threads} threads`);
+
   await execFileAsync(whisperExe, [
     "-m", modelPath,
     "-f", wavPath,
     "-l", "ru",
+    "-t", String(threads),
     "--no-timestamps",
     "--output-format", "txt",
     "--output-dir", outputDir,
   ], {
-    timeout: 600_000,
+    timeout: 1800_000, // 30 minutes max for long audio
     maxBuffer: 50 * 1024 * 1024,
   });
 
