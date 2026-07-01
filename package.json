@@ -42,17 +42,13 @@
           "arch": ["x64"]
         }
       ],
-      "icon": "public/icon.png"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Vox — Расшифровка голоса",
-      "installerIcon": "public/icon.png",
-      "uninstallerIcon": "public/icon.png",
-      "installerHeaderIcon": "public/icon.png"
+      "shortcutName": "Vox — Расшифровка голоса"
     }
   },
   "dependencies": {
