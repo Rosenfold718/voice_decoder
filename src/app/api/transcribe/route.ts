@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { mkdtemp, writeFile, readFile, unlink, rm } from "fs/promises";
+import { mkdtemp, writeFile, readFile, rm, readdir } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import ZAI from "z-ai-web-dev-sdk";
@@ -18,42 +18,85 @@ async function getZAI() {
   return zaiInstance;
 }
 
+// ASR max duration is 30 seconds — we use 28s chunks to be safe
+const CHUNK_SECONDS = 28;
+
+/**
+ * Get audio duration in seconds using ffprobe
+ */
+async function getDuration(filePath: string): Promise<number> {
+  const { stdout } = await execFileAsync("ffprobe", [
+    "-v", "error",
+    "-show_entries", "format=duration",
+    "-of", "default=noprint_wrappers=1:nokey=1",
+    filePath,
+  ], { timeout: 30_000 });
+  return parseFloat(stdout.trim());
+}
+
 /**
  * Convert audio file to WAV 16kHz mono using ffmpeg.
- * Returns the path to the converted file.
  */
 async function convertToWav(inputPath: string, outputDir: string): Promise<string> {
   const outputPath = join(outputDir, "converted.wav");
-
   await execFileAsync("ffmpeg", [
-    "-y",
-    "-i", inputPath,
-    "-ar", "16000",       // 16kHz sample rate (optimal for ASR)
-    "-ac", "1",           // mono
-    "-sample_fmt", "s16", // 16-bit PCM
+    "-y", "-i", inputPath,
+    "-ar", "16000", "-ac", "1", "-sample_fmt", "s16",
     outputPath,
   ], { timeout: 120_000 });
-
   return outputPath;
 }
 
 /**
- * Convert audio file to WebM using ffmpeg.
- * Returns the path to the converted file.
+ * Split WAV file into 28-second chunks.
+ * Returns array of chunk file paths.
  */
-async function convertToWebm(inputPath: string, outputDir: string): Promise<string> {
-  const outputPath = join(outputDir, "converted.webm");
+async function splitIntoChunks(
+  wavPath: string,
+  outputDir: string,
+  duration: number
+): Promise<string[]> {
+  if (duration <= CHUNK_SECONDS) return [wavPath];
+
+  const chunkDir = join(outputDir, "chunks");
+  const { mkdir } = await import("fs/promises");
+  await mkdir(chunkDir, { recursive: true });
 
   await execFileAsync("ffmpeg", [
-    "-y",
-    "-i", inputPath,
-    "-ar", "16000",
-    "-ac", "1",
-    "-c:a", "libopus",
-    outputPath,
-  ], { timeout: 120_000 });
+    "-y", "-i", wavPath,
+    "-f", "segment",
+    "-segment_time", String(CHUNK_SECONDS),
+    "-ar", "16000", "-ac", "1", "-sample_fmt", "s16",
+    join(chunkDir, "chunk_%03d.wav"),
+  ], { timeout: 300_000 });
 
-  return outputPath;
+  const files = await readdir(chunkDir);
+  const chunkFiles = files
+    .filter((f) => f.endsWith(".wav"))
+    .sort()
+    .map((f) => join(chunkDir, f));
+
+  console.log(`[VOX] Split ${duration.toFixed(1)}s audio into ${chunkFiles.length} chunks`);
+  return chunkFiles;
+}
+
+/**
+ * Transcribe a single audio file (WAV or WebM)
+ */
+async function transcribeFile(
+  zai: Awaited<ReturnType<typeof ZAI.create>>,
+  filePath: string
+): Promise<string> {
+  const audioBuffer = await readFile(filePath);
+  const base64Audio = audioBuffer.toString("base64");
+
+  console.log(`[VOX] Sending chunk (${(audioBuffer.length / 1024).toFixed(1)} KB) to ASR...`);
+
+  const response = await zai.audio.asr.create({
+    file_base64: base64Audio,
+  });
+
+  return response.text || "";
 }
 
 export async function POST(request: NextRequest) {
@@ -72,17 +115,9 @@ export async function POST(request: NextRequest) {
 
     // Validate file type
     const validTypes = [
-      "audio/mpeg",
-      "audio/mp3",
-      "audio/wav",
-      "audio/wave",
-      "audio/x-wav",
-      "audio/mp4",
-      "audio/m4a",
-      "audio/ogg",
-      "audio/flac",
-      "audio/x-flac",
-      "audio/webm",
+      "audio/mpeg", "audio/mp3", "audio/wav", "audio/wave",
+      "audio/x-wav", "audio/mp4", "audio/m4a", "audio/ogg",
+      "audio/flac", "audio/x-flac", "audio/webm",
     ];
     const validExtensions = [".mp3", ".wav", ".m4a", ".flac", ".ogg", ".webm"];
     const fileName = audioFile.name.toLowerCase();
@@ -90,10 +125,7 @@ export async function POST(request: NextRequest) {
 
     if (!validTypes.includes(audioFile.type) && !validExtensions.includes(ext)) {
       return NextResponse.json(
-        {
-          success: false,
-          error: `Неподдерживаемый формат файла: ${ext || audioFile.type}. Поддерживаются: MP3, WAV, M4A, FLAC, OGG, WebM`,
-        },
+        { success: false, error: `Неподдерживаемый формат: ${ext || audioFile.type}` },
         { status: 400 }
       );
     }
@@ -102,52 +134,59 @@ export async function POST(request: NextRequest) {
     const fileSizeMB = audioFile.size / (1024 * 1024);
     if (fileSizeMB > 100) {
       return NextResponse.json(
-        {
-          success: false,
-          error: `Файл слишком большой: ${fileSizeMB.toFixed(1)} МБ. Максимум 100 МБ`,
-        },
+        { success: false, error: `Файл слишком большой: ${fileSizeMB.toFixed(1)} МБ (макс. 100 МБ)` },
         { status: 400 }
       );
     }
 
-    // Create temp directory and save the uploaded file
-    tempDir = await mkdtemp(join(tmpdir(), "vox-decoder-"));
+    // Save uploaded file to temp dir
+    tempDir = await mkdtemp(join(tmpdir(), "vox-"));
     const inputPath = join(tempDir, audioFile.name);
-    const arrayBuffer = await audioFile.arrayBuffer();
-    await writeFile(inputPath, Buffer.from(arrayBuffer));
+    await writeFile(inputPath, Buffer.from(await audioFile.arrayBuffer()));
 
-    // Determine if conversion is needed
-    // ASR SDK supports WAV and WebM natively
-    const needsConversion = ext !== ".wav" && ext !== ".webm";
-
-    let finalAudioPath: string;
-
-    if (needsConversion) {
-      console.log(`[VOX DECODER] Converting ${ext} → WAV for ASR...`);
-      finalAudioPath = await convertToWav(inputPath, tempDir);
-      console.log(`[VOX DECODER] Conversion complete`);
-    } else {
-      finalAudioPath = inputPath;
-    }
-
-    // Read the (possibly converted) file and encode to base64
-    const audioBuffer = await readFile(finalAudioPath);
-    const base64Audio = audioBuffer.toString("base64");
-
-    // Transcribe using ASR SDK
-    const zai = await getZAI();
     const startTime = Date.now();
 
-    console.log(`[VOX DECODER] Sending to ASR (${(audioBuffer.length / 1024).toFixed(1)} KB)...`);
+    // Convert to WAV if needed
+    let wavPath: string;
+    if (ext !== ".wav" && ext !== ".webm") {
+      console.log(`[VOX] Converting ${ext} → WAV...`);
+      wavPath = await convertToWav(inputPath, tempDir);
+    } else if (ext === ".webm") {
+      // WebM is accepted by ASR, but let's still get duration
+      // For chunking we need to split, so convert to WAV first
+      wavPath = await convertToWav(inputPath, tempDir);
+    } else {
+      wavPath = inputPath;
+    }
 
-    const response = await zai.audio.asr.create({
-      file_base64: base64Audio,
-    });
+    // Get duration and split if needed
+    const duration = await getDuration(wavPath);
+    console.log(`[VOX] Audio duration: ${duration.toFixed(1)}s`);
+
+    const chunks = await splitIntoChunks(wavPath, tempDir, duration);
+    const zai = await getZAI();
+
+    // Transcribe all chunks
+    const texts: string[] = [];
+    for (let i = 0; i < chunks.length; i++) {
+      console.log(`[VOX] Chunk ${i + 1}/${chunks.length}...`);
+      const text = await transcribeFile(zai, chunks[i]);
+      if (text.trim()) {
+        texts.push(text.trim());
+      }
+    }
 
     const processingTime = Date.now() - startTime;
-    console.log(`[VOX DECODER] ASR done in ${processingTime}ms`);
+    console.log(`[VOX] Done in ${processingTime}ms`);
 
-    if (!response.text || response.text.trim().length === 0) {
+    // Combine and clean text
+    const rawText = texts.join(" ");
+    const cleanedText = rawText
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/(^\w|[.!?]\s+\w)/g, (match) => match.toUpperCase());
+
+    if (!cleanedText) {
       return NextResponse.json({
         success: true,
         transcription: "",
@@ -155,25 +194,23 @@ export async function POST(request: NextRequest) {
         processingTime,
         fileName: audioFile.name,
         fileSize: audioFile.size,
+        audioDuration: duration,
+        chunksProcessed: chunks.length,
         message: "Речь не обнаружена в аудиофайле",
       });
     }
 
-    // Post-process the text
-    const cleanedText = response.text
-      .replace(/\s+/g, " ")
-      .trim()
-      .replace(/(^\w|[.!?]\s+\w)/g, (match) => match.toUpperCase());
-
     return NextResponse.json({
       success: true,
       transcription: cleanedText,
-      rawTranscription: response.text,
+      rawTranscription: rawText,
       wordCount: cleanedText.split(/\s+/).filter(Boolean).length,
       charCount: cleanedText.length,
       processingTime,
       fileName: audioFile.name,
       fileSize: audioFile.size,
+      audioDuration: duration,
+      chunksProcessed: chunks.length,
     });
   } catch (error) {
     console.error("Transcription error:", error);
@@ -188,13 +225,8 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   } finally {
-    // Clean up temp directory
     if (tempDir) {
-      try {
-        await rm(tempDir, { recursive: true, force: true });
-      } catch {
-        // Ignore cleanup errors
-      }
+      try { await rm(tempDir, { recursive: true, force: true }); } catch { /* ignore */ }
     }
   }
 }

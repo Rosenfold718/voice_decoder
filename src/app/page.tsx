@@ -43,6 +43,8 @@ interface TranscriptionResult {
   processingTime: number;
   fileName: string;
   fileSize: number;
+  audioDuration?: number;
+  chunksProcessed?: number;
   error?: string;
   message?: string;
 }
@@ -134,20 +136,33 @@ export default function VoxPage() {
   /* ---- recording ---- */
 
   const startRecording = async () => {
+    // Check if getUserMedia is available at all (iframe/sandbox restriction)
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      toast({
+        title: "Микрофон недоступен",
+        description: "Доступ к микрофону запрещён в текущей среде. На реальном ПК в браузере запись будет работать.",
+        variant: "destructive",
+      });
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       setMediaStream(stream);
 
-      const rec = new MediaRecorder(stream, {
-        mimeType: MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-          ? "audio/webm;codecs=opus"
-          : "audio/webm",
-      });
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "audio/webm";
 
-      const chunks: BlobPart[] = [];
-      rec.ondataavailable = (e) => chunks.push(e.data);
+      const rec = new MediaRecorder(stream, { mimeType });
+
+      const parts: BlobPart[] = [];
+      rec.ondataavailable = (e) => { if (e.data.size > 0) parts.push(e.data); };
       rec.onstop = () => {
-        const blob = new Blob(chunks, { type: rec.mimeType });
+        if (parts.length === 0) {
+          toast({ title: "Запись пуста", description: "Попробуйте снова и говорите громче", variant: "destructive" });
+          return;
+        }
+        const blob = new Blob(parts, { type: mimeType });
         setRecordedBlob(blob);
         stream.getTracks().forEach((t) => t.stop());
         setMediaStream(null);
@@ -159,8 +174,11 @@ export default function VoxPage() {
       setStatus("recording");
 
       timerRef.current = setInterval(() => setRecSeconds((p) => p + 1), 1000);
-    } catch {
-      toast({ title: "Нет доступа к микрофону", variant: "destructive" });
+    } catch (err) {
+      const msg = err instanceof DOMException && err.name === "NotAllowedError"
+        ? "Разрешите доступ к микрофону в настройках браузера"
+        : "Не удалось получить доступ к микрофону";
+      toast({ title: "Микрофон недоступен", description: msg, variant: "destructive" });
     }
   };
 
@@ -362,7 +380,9 @@ export default function VoxPage() {
                           <Mic className="w-7 h-7 text-white/40 group-hover:text-white/60 transition-colors" />
                         </button>
                         <p className="text-[15px] font-medium text-white/50 mb-1">Нажмите для записи</p>
-                        <p className="text-[13px] text-white/20">Голос записывается в браузере и отправляется на обработку</p>
+                        <p className="text-[13px] text-white/20 max-w-xs text-center leading-relaxed">
+                          Голос записывается прямо в браузере, затем отправляется на обработку
+                        </p>
                       </>
                     ) : (
                       <>
@@ -464,15 +484,22 @@ export default function VoxPage() {
                     <span>{result.wordCount} сл.</span>
                     <span className="w-px h-3 bg-white/10" />
                     <span>{fmtTime(result.processingTime)}</span>
+                    {result.chunksProcessed && result.chunksProcessed > 1 && (
+                      <>
+                        <span className="w-px h-3 bg-white/10" />
+                        <span>{result.chunksProcessed} чанков</span>
+                      </>
+                    )}
                   </div>
                 </div>
 
                 {/* Stats */}
-                <div className="grid grid-cols-3 gap-3">
+                <div className={cn("grid gap-3", result.audioDuration != null ? "grid-cols-4" : "grid-cols-3")}>
                   {[
                     { icon: Type, label: "Символов", value: (result.charCount || editableText.length).toString() },
                     { icon: Clock, label: "Обработка", value: fmtTime(result.processingTime) },
                     { icon: FileAudio, label: "Размер", value: fmtSize(result.fileSize) },
+                    ...(result.audioDuration != null ? [{ icon: Clock, label: "Длительность", value: `${result.audioDuration.toFixed(0)}с` }] : []),
                   ].map((s) => (
                     <div key={s.label} className="rounded-lg bg-white/[0.03] border border-white/[0.05] px-3.5 py-3">
                       <div className="flex items-center gap-1.5 mb-1">
