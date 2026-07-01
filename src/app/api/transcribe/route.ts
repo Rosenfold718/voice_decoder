@@ -100,6 +100,51 @@ async function transcribeFile(
   return response.text || "";
 }
 
+/**
+ * Detect if text contains significant non-Cyrillic (likely English) content.
+ * Returns the ratio of non-Cyrillic word characters to total word characters.
+ */
+function englishRatio(text: string): number {
+  // Extract word characters (letters only)
+  const letters = text.replace(/[^a-zA-Zа-яА-ЯёЁ]/g, "");
+  if (letters.length === 0) return 0;
+
+  // Count non-Cyrillic (Latin) characters
+  const latinChars = letters.replace(/[а-яА-ЯёЁ]/g, "").length;
+  return latinChars / letters.length;
+}
+
+/**
+ * Post-process ASR text via LLM to ensure it's in Russian.
+ * Only called when significant English content is detected.
+ */
+async function ensureRussian(
+  zai: Awaited<ReturnType<typeof ZAI.create>>,
+  text: string
+): Promise<string> {
+  console.log("[VOX] Post-processing: converting to Russian via LLM...");
+
+  const response = await zai.chat.completions.create({
+    messages: [
+      {
+        role: "system",
+        content:
+          "Ты — ассистент для расшифровки аудио. Твоя задача: переписать предоставленный текст на русском языке. " +
+          "Если текст уже на русском — просто верни его исправленным (без переводов, без английского). " +
+          "Если текст на английском или смешанный — переведи на русский, сохранив смысл и структуру. " +
+          "Не добавляй пояснений, не используй markdown. Верни ТОЛЬКО текст на русском языке.",
+      },
+      {
+        role: "user",
+        content: text,
+      },
+    ],
+  });
+
+  const result = response.choices?.[0]?.message?.content?.trim();
+  return result || text;
+}
+
 export async function POST(request: NextRequest) {
   let tempDir: string | null = null;
 
@@ -153,8 +198,6 @@ export async function POST(request: NextRequest) {
       console.log(`[VOX] Converting ${ext} → WAV...`);
       wavPath = await convertToWav(inputPath, tempDir);
     } else if (ext === ".webm") {
-      // WebM is accepted by ASR, but let's still get duration
-      // For chunking we need to split, so convert to WAV first
       wavPath = await convertToWav(inputPath, tempDir);
     } else {
       wavPath = inputPath;
@@ -177,15 +220,23 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const processingTime = Date.now() - startTime;
-    console.log(`[VOX] Done in ${processingTime}ms`);
-
     // Combine and clean text
     const rawText = texts.join(" ");
-    const cleanedText = rawText
+    let cleanedText = rawText
       .replace(/\s+/g, " ")
       .trim()
       .replace(/(^\w|[.!?]\s+\w)/g, (match) => match.toUpperCase());
+
+    // Post-process: if significant English detected, convert via LLM
+    const engRatio = englishRatio(cleanedText);
+    console.log(`[VOX] English ratio: ${(engRatio * 100).toFixed(1)}%`);
+
+    if (engRatio > 0.2 && cleanedText.length > 0) {
+      cleanedText = await ensureRussian(zai, cleanedText);
+    }
+
+    const processingTime = Date.now() - startTime;
+    console.log(`[VOX] Done in ${processingTime}ms`);
 
     if (!cleanedText) {
       return NextResponse.json({
@@ -212,6 +263,7 @@ export async function POST(request: NextRequest) {
       fileSize: audioFile.size,
       audioDuration: duration,
       chunksProcessed: chunks.length,
+      postProcessed: engRatio > 0.2,
     });
   } catch (error) {
     console.error("Transcription error:", error);
