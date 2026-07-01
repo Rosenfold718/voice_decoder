@@ -80,7 +80,8 @@ function escXml(s) {
   return s
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 /**
@@ -97,18 +98,32 @@ function generateDocx(text, fileName) {
 
   const paragraphs = text.split(/\n+/).map(p => p.trim()).filter(Boolean);
 
+  // Font run properties for body text (Times New Roman 14pt, with Cyrillic support)
+  const bodyRPr = `<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/><w:sz w:val="28"/><w:szCs w:val="28"/><w:lang w:val="ru-RU"/></w:rPr>`;
+
   const bodyXml = paragraphs
-    .map(p => `<w:p><w:pPr><w:jc w:val="both"/><w:ind w:firstLine="567"/><w:spacing w:after="200" w:line="360"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/><w:sz w:val="28"/></w:rPr><w:t xml:space="preserve">${escXml(p)}</w:t></w:r></w:p>`)
-    .join("");
+    .map(p => `<w:p><w:pPr><w:jc w:val="both"/><w:ind w:firstLine="567"/><w:spacing w:after="200" w:line="360"/></w:pPr><w:r>${bodyRPr}<w:t xml:space="preserve">${escXml(p)}</w:t></w:r></w:p>`)
+    .join("\n");
+
+  // Font run properties for title (18pt bold)
+  const titleRPr = `<w:rPr><w:b/><w:bCs/><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/><w:sz w:val="36"/><w:szCs w:val="36"/><w:lang w:val="ru-RU"/></w:rPr>`;
+
+  // Font run properties for metadata (11pt italic gray)
+  const metaRPr = `<w:rPr><w:i/><w:iCs/><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/><w:sz w:val="22"/><w:szCs w:val="22"/><w:color w:val="666666"/><w:lang w:val="ru-RU"/></w:rPr>`;
 
   const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <w:body>
-    <w:p><w:pPr><w:jc w:val="center"/><w:spacing w:after="200"/></w:pPr><w:r><w:rPr><w:b/><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/><w:sz w:val="36"/></w:rPr><w:t>Расшифровка аудиозаписи</w:t></w:r></w:p>
-    <w:p><w:pPr><w:jc w:val="center"/><w:spacing w:after="100"/></w:pPr><w:r><w:rPr><w:i/><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/><w:sz w:val="22"/><w:color w:val="666666"/></w:rPr><w:t>Файл: ${escXml(fileName || "transcription")}</w:t></w:r></w:p>
-    <w:p><w:pPr><w:jc w:val="center"/><w:spacing w:after="400"/></w:pPr><w:r><w:rPr><w:i/><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/><w:sz w:val="22"/><w:color w:val="666666"/></w:rPr><w:t>Дата обработки: ${escXml(dateStr)}</w:t></w:r></w:p>
-    <w:p><w:pPr><w:jc w:val="center"/><w:spacing w:after="400"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/><w:sz w:val="22"/><w:color w:val="CCCCCC"/></w:rPr><w:t>${"─".repeat(60)}</w:t></w:r></w:p>
-    ${bodyXml}
+    <w:p><w:pPr><w:jc w:val="center"/><w:spacing w:after="200"/></w:pPr><w:r>${titleRPr}<w:t>Расшифровка аудиозаписи</w:t></w:r></w:p>
+    <w:p><w:pPr><w:jc w:val="center"/><w:spacing w:after="100"/></w:pPr><w:r>${metaRPr}<w:t>Файл: ${escXml(fileName || "transcription")}</w:t></w:r></w:p>
+    <w:p><w:pPr><w:jc w:val="center"/><w:spacing w:after="400"/></w:pPr><w:r>${metaRPr}<w:t>Дата обработки: ${escXml(dateStr)}</w:t></w:r></w:p>
+    <w:p><w:pPr><w:jc w:val="center"/><w:spacing w:after="400"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/><w:sz w:val="22"/><w:szCs w:val="22"/><w:color w:val="CCCCCC"/><w:lang w:val="ru-RU"/></w:rPr><w:t>${"\u2500".repeat(60)}</w:t></w:r></w:p>
+${bodyXml}
+    <w:sectPr>
+      <w:pgSz w:w="11906" w:h="16838"/>
+      <w:pgMar w:top="1134" w:right="850" w:bottom="1134" w:left="1701" w:header="708" w:footer="708" w:gutter="0"/>
+      <w:pgNumType w:start="1"/>
+    </w:sectPr>
   </w:body>
 </w:document>`;
 
