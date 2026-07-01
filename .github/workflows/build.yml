@@ -38,14 +38,21 @@ jobs:
           Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "whisper.zip" -UseBasicParsing
           Expand-Archive -Path "whisper.zip" -DestinationPath "whisper-temp" -Force
           New-Item -ItemType Directory -Force -Path "resources/whisper"
-          # Find the main executable (whisper-cli.exe or main.exe)
-          $exe = Get-ChildItem "whisper-temp" -Recurse -Filter "*.exe" | Where-Object { $_.Name -notlike "*upx*" -and ($_.Name -eq "whisper-cli.exe" -or $_.Name -eq "main.exe" -or $_.Name -eq "whisper.exe") } | Select-Object -First 1
+          # Find the main CLI executable (prefer non-deprecated name)
+          $preferred = @("whisper-whisper-cli.exe", "whisper-cli.exe", "whisper.exe", "main.exe")
+          $exes = Get-ChildItem "whisper-temp" -Recurse -Filter "*.exe" | Where-Object { $_.Name -notlike "*upx*" }
+          $exe = $null
+          foreach ($name in $preferred) {
+            $exe = $exes | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+            if ($exe) { break }
+          }
+          # Fallback: any exe if preferred names not found
+          if (-not $exe) { $exe = $exes | Select-Object -First 1 }
           if ($exe) {
-            Copy-Item $exe.FullName "resources\whisper\whisper-cli.exe" -Force
-            Write-Host "Whisper binary: $($exe.Name) -> whisper-cli.exe"
+            Copy-Item $exe.FullName "resources\whisper\vox-whisper.exe" -Force
+            Write-Host "Whisper binary: $($exe.Name) -> vox-whisper.exe"
           } else {
             Write-Error "No whisper executable found in archive"
-            Get-ChildItem "whisper-temp" -Recurse -Filter "*.exe" | ForEach-Object { Write-Host "  Found: $($_.FullName)" }
             exit 1
           }
 

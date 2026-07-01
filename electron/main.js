@@ -82,14 +82,20 @@ function startStaticServer() {
 /*  Whisper transcription (local, no internet)                        */
 /* ------------------------------------------------------------------ */
 function findWhisperExe() {
-  const candidates = [
-    path.join(whisperDir, "whisper-cli.exe"),
-    path.join(whisperDir, "whisper.exe"),
-    path.join(whisperDir, "main.exe"),
-  ];
-  for (const p of candidates) {
-    if (fs.existsSync(p)) return p;
+  // CI always renames the binary to vox-whisper.exe — check that first
+  const fixed = path.join(whisperDir, "vox-whisper.exe");
+  if (fs.existsSync(fixed)) return fixed;
+
+  // Fallback: find any .exe that looks like a whisper binary
+  if (!fs.existsSync(whisperDir)) return null;
+  const exes = fs.readdirSync(whisperDir).filter(f => f.endsWith(".exe"));
+  // Prefer the non-deprecated one
+  const preferred = ["vox-whisper.exe", "whisper-whisper-cli.exe", "whisper-cli.exe", "whisper.exe", "main.exe"];
+  for (const name of preferred) {
+    if (exes.includes(name)) return path.join(whisperDir, name);
   }
+  // Last resort: any exe
+  if (exes.length > 0) return path.join(whisperDir, exes[0]);
   return null;
 }
 
