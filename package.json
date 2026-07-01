@@ -2,14 +2,13 @@
   "name": "vox-voice-decoder",
   "version": "1.0.0",
   "author": "Rosenfold",
-  "description": "Vox — Расшифровка голоса",
+  "description": "Vox — Локальная расшифровка голоса",
   "main": "electron/main.js",
   "scripts": {
     "dev": "next dev -p 3000",
-    "build": "next build && node electron/copy-public.js",
+    "build": "next build",
     "start": "NODE_ENV=production node .next/standalone/server.js",
     "electron:dev": "next dev -p 3000 & sleep 3 && electron .",
-    "electron:build": "npm run build && electron-builder --win",
     "lint": "eslint ."
   },
   "build": {
@@ -23,8 +22,12 @@
     ],
     "extraResources": [
       {
-        "from": ".next/standalone",
-        "to": "standalone"
+        "from": "out",
+        "to": "out"
+      },
+      {
+        "from": "resources/whisper",
+        "to": "whisper"
       },
       {
         "from": "resources/ffmpeg",
@@ -48,10 +51,8 @@
     }
   },
   "dependencies": {
-    "z-ai-web-dev-sdk": "^0.0.18",
     "clsx": "^2.1.1",
     "class-variance-authority": "^0.7.1",
-    "docx": "^9.7.1",
     "framer-motion": "^12.26.2",
     "lucide-react": "^0.525.0",
     "next": "^16.1.3",

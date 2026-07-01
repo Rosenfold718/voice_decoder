@@ -25,59 +25,77 @@ jobs:
       - name: Install npm dependencies
         run: npm install
 
+      - name: Download whisper.cpp
+        shell: pwsh
+        run: |
+          # Get latest release URL for Windows x64 binary
+          $releases = Invoke-RestMethod "https://api.github.com/repos/ggerganov/whisper.cpp/releases/latest"
+          $asset = $releases.assets | Where-Object { $_.name -like "*bin*x64*" -and $_.name -like "*.zip" } | Select-Object -First 1
+          Write-Host "Downloading whisper: $($asset.name) ($([math]::Round($asset.size/1MB, 1)) MB)"
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "whisper.zip" -UseBasicParsing
+          Expand-Archive -Path "whisper.zip" -DestinationPath "whisper-temp" -Force
+          New-Item -ItemType Directory -Force -Path "resources/whisper"
+          # Find the .exe (could be whisper.exe, main.exe, or whisper-cli.exe)
+          $exe = Get-ChildItem "whisper-temp" -Recurse -Filter "*.exe" | Where-Object { $_.Name -notlike "*upx*" } | Select-Object -First 1
+          if ($exe) {
+            Copy-Item $exe.FullName "resources\whisper\" -Force
+            Write-Host "Whisper binary: $($exe.Name)"
+          } else {
+            Write-Error "No whisper.exe found in archive"
+            exit 1
+          }
+
+      - name: Download whisper model (small, ~500MB)
+        shell: pwsh
+        run: |
+          $modelUrl = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin"
+          Write-Host "Downloading ggml-small.bin model..."
+          Invoke-WebRequest -Uri $modelUrl -OutFile "resources\whisper\ggml-small.bin" -UseBasicParsing
+          $size = (Get-Item "resources\whisper\ggml-small.bin").Length
+          Write-Host "Model size: $([math]::Round($size/1MB, 1)) MB"
+
       - name: Download ffmpeg (Windows essentials build)
         shell: pwsh
         run: |
           $url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-          $zipPath = "ffmpeg.zip"
-          Write-Host "Downloading ffmpeg..."
-          Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
-          Write-Host "Extracting..."
-          Expand-Archive -Path $zipPath -DestinationPath "ffmpeg-temp" -Force
+          Invoke-WebRequest -Uri $url -OutFile "ffmpeg.zip" -UseBasicParsing
+          Expand-Archive -Path "ffmpeg.zip" -DestinationPath "ffmpeg-temp" -Force
           $ffmpegRoot = Get-ChildItem "ffmpeg-temp" -Directory | Select-Object -First 1
-          Write-Host "Found ffmpeg folder: $($ffmpegRoot.FullName)"
           New-Item -ItemType Directory -Force -Path "resources/ffmpeg"
           Copy-Item "$($ffmpegRoot.FullName)\bin\ffmpeg.exe" "resources\ffmpeg\" -Force
           Copy-Item "$($ffmpegRoot.FullName)\bin\ffprobe.exe" "resources\ffmpeg\" -Force
           & "resources\ffmpeg\ffmpeg.exe" -version
-          Write-Host "ffmpeg bundled successfully"
+          Write-Host "ffmpeg bundled"
 
-      - name: Build Next.js + copy public to standalone
+      - name: Build Next.js static export
         run: npm run build
 
-      - name: Verify standalone structure
+      - name: Verify output
         shell: pwsh
         run: |
-          Write-Host "=== Standalone contents ==="
-          Get-ChildItem ".next\standalone" | ForEach-Object { Write-Host $_.Name }
-          Write-Host ""
-          Write-Host "=== node_modules check ==="
-          Test-Path ".next\standalone\node_modules"
-          Write-Host ""
-          Write-Host "=== server.js check ==="
-          Test-Path ".next\standalone\server.js"
-          Write-Host ""
-          Write-Host "=== public check ==="
-          Test-Path ".next\standalone\public"
+          Write-Host "=== out/ contents ==="
+          Test-Path "out\index.html"
+          Write-Host "=== whisper ==="
+          Get-ChildItem "resources\whisper" | ForEach-Object { Write-Host $_.Name $_.Length }
+          Write-Host "=== ffmpeg ==="
+          Get-ChildItem "resources\ffmpeg" | ForEach-Object { Write-Host $_.Name $_.Length }
 
       - name: Build Electron .exe
         run: npx electron-builder --win --publish never
 
-      - name: Find the installer
+      - name: Find installer
         shell: pwsh
         run: |
           $exe = Get-ChildItem "dist-electron\*.exe" | Select-Object -First 1
           if ($exe) {
-            Write-Host "Installer: $($exe.FullName)"
-            Write-Host "Size: $([math]::Round($exe.Length / 1MB, 1)) MB"
+            Write-Host "Installer: $($exe.Name) ($([math]::Round($exe.Length/1MB, 0)) MB)"
             echo "EXE_PATH=$($exe.FullName)" >> $env:GITHUB_ENV
-            echo "EXE_NAME=$($exe.Name)" >> $env:GITHUB_ENV
           } else {
-            Write-Error "No .exe found in dist-electron!"
+            Write-Error "No .exe found"
             exit 1
           }
 
-      - name: Delete old release assets (re-tag)
+      - name: Delete old release (re-tag)
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         env:
@@ -92,7 +110,7 @@ jobs:
         with:
           files: ${{ env.EXE_PATH }}
 
-      - name: Upload installer as artifact (for manual builds)
+      - name: Upload as artifact (manual builds)
         if: "!startsWith(github.ref, 'refs/tags/v')"
         uses: actions/upload-artifact@v4
         with:

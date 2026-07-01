@@ -8,8 +8,9 @@ out/
 # Build output
 dist-electron/
 
-# Bundled ffmpeg (downloaded by CI)
+# Bundled binaries (downloaded by CI)
 resources/ffmpeg/
+resources/whisper/
 
 # Environment (contains API keys)
 .env

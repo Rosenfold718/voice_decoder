@@ -1,5 +1,16 @@
 "use client";
 
+/* Electron IPC type */
+declare global {
+  interface Window {
+    electronAPI?: {
+      isElectron: boolean;
+      transcribe: (audioBase64: string, fileName: string) => Promise<TranscriptionResult>;
+      exportDocx: (text: string, fileName: string) => Promise<{ success: boolean }>;
+    };
+  }
+}
+
 import React, { useState, useCallback, useRef, useEffect } from "react";
 import { motion } from "framer-motion";
 import {
@@ -371,15 +382,34 @@ export default function VoxPage() {
   const handleTranscribe = async () => {
     setStatus("processing");
     try {
-      const formData = new FormData();
+      let audioBase64: string;
+      let fileName: string;
+
       if (recordedBlob) {
-        formData.append("audio", recordedBlob, "recording.webm");
+        const buf = await recordedBlob.arrayBuffer();
+        audioBase64 = Buffer.from(buf).toString("base64");
+        fileName = "recording.webm";
       } else if (file) {
-        formData.append("audio", file);
+        const buf = await file.arrayBuffer();
+        audioBase64 = Buffer.from(buf).toString("base64");
+        fileName = file.name;
+      } else {
+        return;
       }
-      const res = await fetch("/api/transcribe", { method: "POST", body: formData });
-      const data: TranscriptionResult = await res.json();
-      if (!res.ok) throw new Error(data.error || "Ошибка сервера");
+
+      let data: TranscriptionResult;
+      if (window.electronAPI?.isElectron) {
+        data = await window.electronAPI.transcribe(audioBase64, fileName);
+      } else {
+        const formData = new FormData();
+        if (recordedBlob) formData.append("audio", recordedBlob, fileName);
+        else if (file) formData.append("audio", file);
+        const res = await fetch("/api/transcribe", { method: "POST", body: formData });
+        data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Ошибка сервера");
+      }
+
+      if (!data.success) throw new Error(data.error || "Ошибка распознавания");
       setResult(data);
       setEditableText(data.transcription);
       setStatus("done");
@@ -399,23 +429,30 @@ export default function VoxPage() {
   const exportDocx = async () => {
     if (!editableText.trim()) return;
     try {
-      const res = await fetch("/api/export-docx", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: editableText, fileName: file?.name || recordedBlob ? "запись" : "transcription" }),
-      });
-      if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      const base = (file?.name || "transcription").replace(/\.[^.]+$/, "");
-      a.download = `${base}_расшифровка.docx`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      toast({ title: "Документ скачан" });
+      const fName = file?.name || (recordedBlob ? "запись" : "transcription");
+
+      if (window.electronAPI?.isElectron) {
+        await window.electronAPI.exportDocx(editableText, fName);
+        toast({ title: "Документ сохранён" });
+      } else {
+        const res = await fetch("/api/export-docx", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: editableText, fileName: fName }),
+        });
+        if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        const base = fName.replace(/\.[^.]+$/, "");
+        a.download = `${base}_расшифровка.docx`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        toast({ title: "Документ скачан" });
+      }
     } catch (err) {
       toast({ title: "Ошибка экспорта", description: err instanceof Error ? err.message : "", variant: "destructive" });
     }
