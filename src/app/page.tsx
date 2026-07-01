@@ -1,11 +1,10 @@
 "use client";
 
 import React, { useState, useCallback, useRef, useEffect } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import {
   Upload,
   Mic,
-  MicOff,
   Download,
   Copy,
   Check,
@@ -19,7 +18,6 @@ import {
   ArrowDownToLine,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -75,6 +73,81 @@ function fmtTimer(sec: number) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Audio Level Meter (Web Audio API)                                  */
+/* ------------------------------------------------------------------ */
+
+function useAudioLevel(stream: MediaStream | null) {
+  const [level, setLevel] = useState(0);
+  const ctxRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const rafRef = useRef<number>(0);
+  const dataArrayRef = useRef<Uint8Array | null>(null);
+
+  useEffect(() => {
+    if (!stream) {
+      return;
+    }
+
+    const ctx = new AudioContext();
+    const source = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    source.connect(analyser);
+    ctxRef.current = ctx;
+    analyserRef.current = analyser;
+    dataArrayRef.current = new Uint8Array(analyser.frequencyBinCount);
+
+    const tick = () => {
+      if (!analyserRef.current || !dataArrayRef.current) return;
+      analyserRef.current.getByteFrequencyData(dataArrayRef.current);
+      const avg = dataArrayRef.current.reduce((a, b) => a + b, 0) / dataArrayRef.current.length;
+      setLevel(avg / 255);
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      ctx.close();
+    };
+  }, [stream]);
+
+  return level;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Level Bars Component                                               */
+/* ------------------------------------------------------------------ */
+
+function LevelBars({ level }: { level: number }) {
+  const barCount = 32;
+  const bars = Array.from({ length: barCount }, (_, i) => {
+    // center-weighted distribution — middle bars are taller
+    const center = barCount / 2;
+    const dist = Math.abs(i - center) / center;
+    const height = Math.max(2, level * (1 - dist * 0.6) * 100);
+    return height;
+  });
+
+  return (
+    <div className="flex items-end justify-center gap-[2px] h-10">
+      {bars.map((h, i) => (
+        <div
+          key={i}
+          className="w-[3px] rounded-full transition-[height] duration-75"
+          style={{
+            height: `${h}%`,
+            backgroundColor: h > 60
+              ? "rgba(239, 68, 68, 0.8)"
+              : "rgba(255, 255, 255, 0.2)",
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  Page                                                               */
 /* ------------------------------------------------------------------ */
 
@@ -92,9 +165,11 @@ export default function VoxPage() {
   const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
+  const audioLevel = useAudioLevel(mediaStream);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const timerRef = useRef<ReturnType<typeof setInterval>>();
+  const silenceTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const { toast } = useToast();
 
   const isProcessing = status === "processing";
@@ -135,16 +210,37 @@ export default function VoxPage() {
 
   /* ---- recording ---- */
 
+  const cleanupRecording = useCallback(() => {
+    clearInterval(timerRef.current);
+    clearTimeout(silenceTimerRef.current);
+    mediaStream?.getTracks().forEach((t) => t.stop());
+    setMediaStream(null);
+    setMediaRecorder(null);
+  }, [mediaStream]);
+
+  const stopRecording = useCallback(() => {
+    if (mediaRecorder && mediaRecorder.state !== "inactive") {
+      mediaRecorder.stop();
+    }
+    clearInterval(timerRef.current);
+    clearTimeout(silenceTimerRef.current);
+    setMediaRecorder(null);
+    setStatus("idle");
+    setFile(null);
+    setResult(null);
+    setEditableText("");
+  }, [mediaRecorder]);
+
   const startRecording = async () => {
-    // Check if getUserMedia is available at all (iframe/sandbox restriction)
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       toast({
         title: "Микрофон недоступен",
-        description: "Доступ к микрофону запрещён в текущей среде. На реальном ПК в браузере запись будет работать.",
+        description: "Запись голоса работает только в обычном браузере на ПК. Загрузите аудиофайл через вкладку «Файл».",
         variant: "destructive",
       });
       return;
     }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       setMediaStream(stream);
@@ -154,12 +250,11 @@ export default function VoxPage() {
         : "audio/webm";
 
       const rec = new MediaRecorder(stream, { mimeType });
-
       const parts: BlobPart[] = [];
       rec.ondataavailable = (e) => { if (e.data.size > 0) parts.push(e.data); };
       rec.onstop = () => {
         if (parts.length === 0) {
-          toast({ title: "Запись пуста", description: "Попробуйте снова и говорите громче", variant: "destructive" });
+          toast({ title: "Запись пуста", variant: "destructive" });
           return;
         }
         const blob = new Blob(parts, { type: mimeType });
@@ -174,57 +269,61 @@ export default function VoxPage() {
       setStatus("recording");
 
       timerRef.current = setInterval(() => setRecSeconds((p) => p + 1), 1000);
+
+      // Auto-detect silence: if level stays at 0 for 3s, mic isn't working
+      silenceTimerRef.current = setTimeout(() => {
+        // will be checked in the effect below
+      }, 3000);
     } catch (err) {
       const msg = err instanceof DOMException && err.name === "NotAllowedError"
-        ? "Разрешите доступ к микрофону в настройках браузера"
-        : "Не удалось получить доступ к микрофону";
+        ? "Разрешите доступ к микрофону в адресной строке браузера"
+        : "Не удалось получить доступ к микрофону. Попробуйте вкладку «Файл».";
       toast({ title: "Микрофон недоступен", description: msg, variant: "destructive" });
     }
   };
 
-  const stopRecording = () => {
-    if (mediaRecorder && mediaRecorder.state !== "inactive") {
-      mediaRecorder.stop();
-    }
-    clearInterval(timerRef.current);
-    setMediaRecorder(null);
-    setStatus("idle");
-    setFile(null);
-    setResult(null);
-    setEditableText("");
-  };
+  // Detect persistent silence during recording
+  useEffect(() => {
+    if (status !== "recording" || recSeconds < 3) return;
+
+    // Check every second after 3s — if level is always near 0, mic is dead
+    const check = setInterval(() => {
+      if (audioLevel < 0.01 && recSeconds >= 3) {
+        clearInterval(check);
+        stopRecording();
+        toast({
+          title: "Микрофон не захватывает звук",
+          description: "Возможно, вы находитесь в ограниченной среде (iframe). Запись работает только при открытии приложения в обычном браузере на ПК. Используйте вкладку «Файл» для загрузки аудио.",
+          variant: "destructive",
+          duration: 6000,
+        });
+      }
+    }, 1000);
+
+    return () => clearInterval(check);
+  }, [status, recSeconds, audioLevel, stopRecording]);
 
   useEffect(() => {
-    return () => {
-      clearInterval(timerRef.current);
-      mediaStream?.getTracks().forEach((t) => t.stop());
-    };
-  }, [mediaStream]);
+    return () => cleanupRecording();
+  }, [cleanupRecording]);
 
   /* ---- transcribe ---- */
 
   const handleTranscribe = async () => {
     setStatus("processing");
-
     try {
       const formData = new FormData();
-      const sourceLabel = recordedBlob ? "запись.webm" : file!.name;
-
       if (recordedBlob) {
         formData.append("audio", recordedBlob, "recording.webm");
       } else if (file) {
         formData.append("audio", file);
       }
-
       const res = await fetch("/api/transcribe", { method: "POST", body: formData });
       const data: TranscriptionResult = await res.json();
-
       if (!res.ok) throw new Error(data.error || "Ошибка сервера");
-
       setResult(data);
       setEditableText(data.transcription);
       setStatus("done");
-
       if (data.message) {
         toast({ title: "Внимание", description: data.message });
       } else {
@@ -275,6 +374,7 @@ export default function VoxPage() {
   };
 
   const clearAll = () => {
+    cleanupRecording();
     setFile(null);
     setRecordedBlob(null);
     setResult(null);
@@ -370,7 +470,7 @@ export default function VoxPage() {
 
                 {/* ---- RECORD MODE ---- */}
                 {mode === "record" && (
-                  <div className="flex flex-col items-center py-16 sm:py-20">
+                  <div className="flex flex-col items-center py-12 sm:py-16">
                     {status !== "recording" ? (
                       <>
                         <button
@@ -381,21 +481,33 @@ export default function VoxPage() {
                         </button>
                         <p className="text-[15px] font-medium text-white/50 mb-1">Нажмите для записи</p>
                         <p className="text-[13px] text-white/20 max-w-xs text-center leading-relaxed">
-                          Голос записывается прямо в браузере, затем отправляется на обработку
+                          Голос записывается в браузере, затем отправляется на обработку
+                        </p>
+                        <p className="text-[11px] text-white/10 mt-3">
+                          Требуется доступ к микрофону
                         </p>
                       </>
                     ) : (
                       <>
                         <button
                           onClick={stopRecording}
-                          className="w-20 h-20 rounded-full bg-red-500/10 border-2 border-red-500/30 flex items-center justify-center mb-6 transition-all hover:bg-red-500/20"
+                          className="w-20 h-20 rounded-full bg-red-500/10 border-2 border-red-500/30 flex items-center justify-center mb-5 transition-all hover:bg-red-500/20"
                         >
                           <Square className="w-6 h-6 text-red-400 fill-red-400" />
                         </button>
-                        <p className="text-2xl font-mono font-light text-white/70 tabular-nums mb-2">
+                        <p className="text-2xl font-mono font-light text-white/70 tabular-nums mb-3">
                           {fmtTimer(recSeconds)}
                         </p>
-                        <p className="text-[13px] text-red-400/70">Запись идёт — нажмите для остановки</p>
+                        {/* Audio level meter */}
+                        <div className="w-full max-w-xs mb-3">
+                          <LevelBars level={audioLevel} />
+                        </div>
+                        <p className="text-[13px] text-red-400/70 mb-1">Запись идёт — нажмите для остановки</p>
+                        <p className="text-[11px] text-white/15">
+                          {audioLevel < 0.01
+                            ? "Микрофон не фиксирует звук..."
+                            : "Говорите в микрофон"}
+                        </p>
                       </>
                     )}
                   </div>
@@ -404,7 +516,6 @@ export default function VoxPage() {
                 {/* ---- Source Selected (idle, ready to transcribe) ---- */}
                 {hasSource && status === "idle" && (
                   <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mt-5">
-                    {/* Source info bar */}
                     <div className="flex items-center justify-between rounded-xl bg-white/[0.04] border border-white/[0.06] px-4 py-3 mb-4">
                       <div className="flex items-center gap-3 min-w-0">
                         <FileAudio className="w-4 h-4 text-white/25 shrink-0" />
@@ -413,6 +524,7 @@ export default function VoxPage() {
                             {recordedBlob ? `Запись (${fmtTimer(recSeconds)})` : file?.name}
                           </p>
                           {file && <p className="text-[11px] text-white/25">{fmtSize(file.size)}</p>}
+                          {recordedBlob && <p className="text-[11px] text-white/25">{fmtSize(recordedBlob.size)}</p>}
                         </div>
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
@@ -474,7 +586,6 @@ export default function VoxPage() {
             {/* === Result Section === */}
             {(status === "done" && result) && (
               <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }} className="space-y-4">
-                {/* Back / source info */}
                 <div className="flex items-center justify-between">
                   <button onClick={clearAll} className="text-[13px] text-white/30 hover:text-white/50 transition-colors flex items-center gap-1.5">
                     <Upload className="w-3.5 h-3.5" />
@@ -493,7 +604,6 @@ export default function VoxPage() {
                   </div>
                 </div>
 
-                {/* Stats */}
                 <div className={cn("grid gap-3", result.audioDuration != null ? "grid-cols-4" : "grid-cols-3")}>
                   {[
                     { icon: Type, label: "Символов", value: (result.charCount || editableText.length).toString() },
@@ -511,9 +621,7 @@ export default function VoxPage() {
                   ))}
                 </div>
 
-                {/* Text output */}
                 <div className="rounded-xl bg-white/[0.03] border border-white/[0.06] overflow-hidden">
-                  {/* Toolbar */}
                   <div className="flex items-center justify-between px-4 h-10 border-b border-white/[0.06]">
                     <div className="flex items-center gap-2">
                       <div className="flex gap-1">
@@ -542,7 +650,6 @@ export default function VoxPage() {
                       </Tooltip>
                     </div>
                   </div>
-
                   <ScrollArea className="h-[320px] sm:h-[420px]">
                     <textarea
                       value={editableText}
@@ -554,7 +661,6 @@ export default function VoxPage() {
                   </ScrollArea>
                 </div>
 
-                {/* Actions */}
                 <div className="flex gap-3">
                   <Button
                     onClick={exportDocx}
