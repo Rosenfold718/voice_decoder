@@ -9,92 +9,65 @@ Desktop-приложение для перевода русской речи в 
 ## Возможности
 
 - **Загрузка аудиофайлов** — MP3, WAV, M4A, FLAC, OGG, WebM (drag & drop или выбор файла)
-- **Запись голоса** — прямо в приложении через микрофон браузера
+- **Запись голоса** — прямо в приложении через микрофон
 - **Автоматическое разбиение** — длинные аудиофайлы режутся на 28-секундные чанки
 - **Русский язык** — автоматическая конвертация при необходимости через LLM
 - **Редактирование** — распознанный текст можно редактировать прямо в приложении
-- **Экспорт в Word** — formatted .docx (Times New Roman 14pt, выравнивание по ширине)
+- **Экспорт в Word** — форматированный .docx (Times New Roman 14pt, выравнивание по ширине)
 - **Копирование** — один клик для копирования в буфер обмена
 
-## Системные требования
+## Установка
 
-- **Windows 10/11** (x64)
-- **ffmpeg** — должен быть установлен и доступен в PATH
-  - Скачайте с [ffmpeg.org](https://ffmpeg.org/download.html) и добавьте в PATH
-  - Проверьте: `ffmpeg -version` в командной строке
+1. Скачайте **Vox Setup.exe** из раздела [Releases](https://github.com/Rosenfold718/voice_decoder/releases)
+2. Запустите скачанный файл
+3. Нажмите «Установить»
+4. Готово! На рабочем столе появится иконка **Vox — Расшифровка голоса**
 
-## Установка и запуск
+### Системные требования
 
-### Из исходников (разработка)
+- Windows 10 или 11 (x64)
+- Интернет-соединение (для распознавания речи)
+
+Никакого дополнительного ПО устанавливать не нужно — всё включено.
+
+## Разработка
 
 ```bash
-# Клонируйте репозиторий
 git clone https://github.com/Rosenfold718/voice_decoder.git
 cd voice_decoder
-
-# Установите зависимости
 npm install
-
-# Создайте .env файл с API-ключом
 cp .env.example .env
-# Отредактируйте .env — впишите ваш ZAI_API_KEY
-
-# Запустите в режиме разработки
 npm run dev
-# Откройте http://localhost:3000 в браузере
 ```
-
-### Сборка .exe (для дистрибуции)
-
-```bash
-# Установите зависимости
-npm install
-
-# Соберите приложение
-npm run electron:build
-```
-
-Результат: `dist-electron/Vox Setup X.X.X.exe` — установщик для Windows.
-
-### Готовый .exe
-
-После установки через `.exe`:
-1. Убедитесь, что **ffmpeg** установлен и добавлен в PATH
-2. Запустите **Vox** с рабочего стола
-3. Приложение откроется автоматически
 
 ## Структура проекта
 
 ```
 voice_decoder/
+├── .github/workflows/    # GitHub Actions — автосборка .exe
 ├── electron/              # Electron main process
-│   ├── main.js           # Запуск Next.js сервера + окно
-│   ├── preload.js        # Preload script (context bridge)
-│   └── copy-static.js    # Post-build: копирование статики
 ├── src/
 │   ├── app/
-│   │   ├── page.tsx      # Главная страница (UI)
-│   │   ├── layout.tsx    # Layout (lang=ru, метаданные)
-│   │   ├── globals.css   # Тёмная тема, кастомный скроллбар
+│   │   ├── page.tsx       # Главная страница (UI)
+│   │   ├── layout.tsx     # Layout (lang=ru)
 │   │   └── api/
 │   │       ├── transcribe/route.ts   # ASR + LLM постобработка
 │   │       └── export-docx/route.ts  # Генерация .docx
-│   ├── components/ui/    # shadcn/ui компоненты
-│   ├── hooks/            # Custom React hooks
-│   └── lib/              # Утилиты
-├── public/               # Статические файлы
-├── .env.example          # Шаблон переменных окружения
-├── package.json          # Зависимости + Electron конфигурация
-└── next.config.ts        # Next.js (standalone output)
+│   ├── components/ui/     # shadcn/ui компоненты
+│   ├── hooks/
+│   └── lib/
+├── public/
+├── package.json
+└── next.config.ts
 ```
 
 ## Технологии
 
 - **Frontend**: Next.js 16, React 19, TypeScript, Tailwind CSS 4, shadcn/ui, Framer Motion
 - **Backend**: Next.js API Routes, z-ai-web-dev-sdk (ASR + LLM)
-- **Audio**: ffmpeg (конвертация + чанкинг), Web Audio API (визуализация)
+- **Audio**: ffmpeg (встроен в .exe), Web Audio API
 - **Desktop**: Electron 43, electron-builder (NSIS installer)
-- **Export**: docx.js (Word документы)
+- **Export**: docx.js
 
 ## Лицензия
 

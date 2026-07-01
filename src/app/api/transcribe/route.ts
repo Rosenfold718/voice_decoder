@@ -8,6 +8,12 @@ import ZAI from "z-ai-web-dev-sdk";
 
 const execFileAsync = promisify(execFile);
 
+// --- Ffmpeg / ffprobe path resolution ---
+// In Electron packaged app: env vars set by main.js point to bundled binaries
+// In dev / web: fall back to system PATH ("ffmpeg", "ffprobe")
+const FFMPEG = process.env.VOX_FFMPEG_PATH || "ffmpeg";
+const FFPROBE = process.env.VOX_FFPROBE_PATH || "ffprobe";
+
 // Cache for SDK instance
 let zaiInstance: Awaited<ReturnType<typeof ZAI.create>> | null = null;
 
@@ -25,7 +31,7 @@ const CHUNK_SECONDS = 28;
  * Get audio duration in seconds using ffprobe
  */
 async function getDuration(filePath: string): Promise<number> {
-  const { stdout } = await execFileAsync("ffprobe", [
+  const { stdout } = await execFileAsync(FFPROBE, [
     "-v", "error",
     "-show_entries", "format=duration",
     "-of", "default=noprint_wrappers=1:nokey=1",
@@ -39,7 +45,7 @@ async function getDuration(filePath: string): Promise<number> {
  */
 async function convertToWav(inputPath: string, outputDir: string): Promise<string> {
   const outputPath = join(outputDir, "converted.wav");
-  await execFileAsync("ffmpeg", [
+  await execFileAsync(FFMPEG, [
     "-y", "-i", inputPath,
     "-ar", "16000", "-ac", "1", "-sample_fmt", "s16",
     outputPath,
@@ -62,7 +68,7 @@ async function splitIntoChunks(
   const { mkdir } = await import("fs/promises");
   await mkdir(chunkDir, { recursive: true });
 
-  await execFileAsync("ffmpeg", [
+  await execFileAsync(FFMPEG, [
     "-y", "-i", wavPath,
     "-f", "segment",
     "-segment_time", String(CHUNK_SECONDS),
@@ -105,11 +111,8 @@ async function transcribeFile(
  * Returns the ratio of non-Cyrillic word characters to total word characters.
  */
 function englishRatio(text: string): number {
-  // Extract word characters (letters only)
   const letters = text.replace(/[^a-zA-Zа-яА-ЯёЁ]/g, "");
   if (letters.length === 0) return 0;
-
-  // Count non-Cyrillic (Latin) characters
   const latinChars = letters.replace(/[а-яА-ЯёЁ]/g, "").length;
   return latinChars / letters.length;
 }
@@ -194,10 +197,8 @@ export async function POST(request: NextRequest) {
 
     // Convert to WAV if needed
     let wavPath: string;
-    if (ext !== ".wav" && ext !== ".webm") {
+    if (ext !== ".wav") {
       console.log(`[VOX] Converting ${ext} → WAV...`);
-      wavPath = await convertToWav(inputPath, tempDir);
-    } else if (ext === ".webm") {
       wavPath = await convertToWav(inputPath, tempDir);
     } else {
       wavPath = inputPath;

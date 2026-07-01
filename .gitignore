@@ -8,6 +8,9 @@ out/
 # Build output
 dist-electron/
 
+# Bundled ffmpeg (downloaded by CI)
+resources/ffmpeg/
+
 # Environment (contains API keys)
 .env
 .env.*
@@ -38,10 +41,11 @@ tool-results/
 upload/
 screenshot-*.png
 worklog.md
+bun.lock
 
 # IDE
 .idea/
 .vscode/
 
 # Skills (internal)
-skills/Vox.zip
+skills/

@@ -8,11 +8,32 @@ let mainWindow = null;
 let serverProcess = null;
 
 const isDev = !app.isPackaged;
+
 // In packaged app: standalone server is in resources/standalone
 // In dev: it's in .next/standalone
 const standaloneDir = isDev
   ? path.join(__dirname, "..", ".next", "standalone")
   : path.join(process.resourcesPath, "standalone");
+
+// Ffmpeg binaries location
+// In packaged app: resources/ffmpeg
+// In dev: resources/ffmpeg (downloaded manually) or system PATH
+const ffmpegDir = isDev
+  ? path.join(__dirname, "..", "resources", "ffmpeg")
+  : path.join(process.resourcesPath, "ffmpeg");
+
+/**
+ * Resolve the path to ffmpeg.exe / ffprobe.exe.
+ * Returns null if not found (will fall back to system PATH).
+ */
+function resolveFfmpeg() {
+  const ffmpegExe = path.join(ffmpegDir, "ffmpeg.exe");
+  const ffprobeExe = path.join(ffmpegDir, "ffprobe.exe");
+  if (fs.existsSync(ffmpegExe) && fs.existsSync(ffprobeExe)) {
+    return { ffmpeg: ffmpegExe, ffprobe: ffprobeExe };
+  }
+  return null;
+}
 
 /**
  * Start the Next.js standalone server as a child process.
@@ -26,12 +47,24 @@ function startServer() {
     return;
   }
 
+  const ffmpegPaths = resolveFfmpeg();
+
   const env = {
     ...process.env,
     NODE_ENV: "production",
     PORT: String(PORT),
     HOSTNAME: "127.0.0.1",
   };
+
+  // If bundled ffmpeg found, pass its directory to the server
+  // so the API routes can use it
+  if (ffmpegPaths) {
+    env.VOX_FFMPEG_PATH = ffmpegPaths.ffmpeg;
+    env.VOX_FFPROBE_PATH = ffmpegPaths.ffprobe;
+    console.log(`[Vox] Using bundled ffmpeg: ${ffmpegPaths.ffmpeg}`);
+  } else if (isDev) {
+    console.log("[Vox] No bundled ffmpeg found, relying on system PATH");
+  }
 
   serverProcess = spawn(process.execPath, [serverScript], {
     cwd: standaloneDir,
@@ -86,7 +119,7 @@ function createWindow() {
 /**
  * Wait for the server to be ready by polling the URL.
  */
-function waitForServer(maxRetries = 40, interval = 500) {
+function waitForServer(maxRetries = 60, interval = 500) {
   return new Promise((resolve, reject) => {
     const http = require("http");
     let retries = 0;
@@ -127,7 +160,7 @@ app.whenReady().then(async () => {
     const { dialog } = require("electron");
     dialog.showErrorBox(
       "Vox — Ошибка запуска",
-      "Не удалось запустить сервер.\nУбедитесь, что ffmpeg установлен.\n\n" + err.message
+      "Не удалось запустить приложение.\nПопробуйте переустановить.\n\n" + err.message
     );
     app.quit();
   }

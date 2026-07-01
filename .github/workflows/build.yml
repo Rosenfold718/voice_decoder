@@ -1,0 +1,84 @@
+name: Build Windows .exe
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install npm dependencies
+        run: npm install
+
+      - name: Download ffmpeg (Windows essentials build)
+        shell: pwsh
+        run: |
+          $url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+          $zipPath = "ffmpeg.zip"
+          Write-Host "Downloading ffmpeg..."
+          Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
+          Write-Host "Extracting..."
+          Expand-Archive -Path $zipPath -DestinationPath "ffmpeg-temp" -Force
+          # Find the extracted folder (name varies by version)
+          $ffmpegRoot = Get-ChildItem "ffmpeg-temp" -Directory | Select-Object -First 1
+          Write-Host "Found ffmpeg folder: $($ffmpegRoot.FullName)"
+          # Create resources/ffmpeg and copy only the 3 needed binaries
+          New-Item -ItemType Directory -Force -Path "resources/ffmpeg"
+          Copy-Item "$($ffmpegRoot.FullName)\bin\ffmpeg.exe" "resources\ffmpeg\" -Force
+          Copy-Item "$($ffmpegRoot.FullName)\bin\ffprobe.exe" "resources\ffmpeg\" -Force
+          # Verify
+          & "resources\ffmpeg\ffmpeg.exe" -version
+          Write-Host "ffmpeg bundled successfully"
+
+      - name: Build Next.js + prepare standalone
+        run: npm run build
+
+      - name: Build Electron .exe
+        run: npx electron-builder --win --publish never
+
+      - name: Find the installer
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "dist-electron\*.exe" | Select-Object -First 1
+          if ($exe) {
+            Write-Host "Installer: $($exe.FullName)"
+            Write-Host "Size: $([math]::Round($exe.Length / 1MB, 1)) MB"
+            echo "EXE_PATH=$($exe.FullName)" >> $env:GITHUB_ENV
+            echo "EXE_NAME=$($exe.Name)" >> $env:GITHUB_ENV
+          } else {
+            Write-Error "No .exe found in dist-electron!"
+            exit 1
+          }
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.EXE_PATH }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+
+      - name: Upload installer as artifact (for manual builds)
+        if: "!startsWith(github.ref, 'refs/tags/v')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: vox-installer
+          path: ${{ env.EXE_PATH }}
+          retention-days: 30
