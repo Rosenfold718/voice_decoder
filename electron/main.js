@@ -7,17 +7,18 @@ const PORT = 3456;
 let mainWindow = null;
 let serverProcess = null;
 
-// In packaged app, resources are in different locations
 const isDev = !app.isPackaged;
-const appDir = isDev
-  ? path.join(__dirname, "..")
-  : path.join(process.resourcesPath, "app");
+// In packaged app: standalone server is in resources/standalone
+// In dev: it's in .next/standalone
+const standaloneDir = isDev
+  ? path.join(__dirname, "..", ".next", "standalone")
+  : path.join(process.resourcesPath, "standalone");
 
 /**
  * Start the Next.js standalone server as a child process.
  */
 function startServer() {
-  const serverScript = path.join(appDir, ".next", "standalone", "server.js");
+  const serverScript = path.join(standaloneDir, "server.js");
 
   if (!fs.existsSync(serverScript)) {
     console.error(`Server script not found: ${serverScript}`);
@@ -33,7 +34,7 @@ function startServer() {
   };
 
   serverProcess = spawn(process.execPath, [serverScript], {
-    cwd: path.join(appDir, ".next", "standalone"),
+    cwd: standaloneDir,
     env,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -65,8 +66,7 @@ function createWindow() {
     height: 720,
     minWidth: 640,
     minHeight: 480,
-    title: "Vox — Расшифровка голоса",
-    icon: path.join(appDir, "public", "logo.svg"),
+    title: "Vox",
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -75,9 +75,7 @@ function createWindow() {
     },
   });
 
-  // Remove default menu
   Menu.setApplicationMenu(null);
-
   mainWindow.loadURL(`http://127.0.0.1:${PORT}`);
 
   mainWindow.on("closed", () => {
@@ -88,25 +86,20 @@ function createWindow() {
 /**
  * Wait for the server to be ready by polling the URL.
  */
-function waitForServer(maxRetries = 30, interval = 500) {
+function waitForServer(maxRetries = 40, interval = 500) {
   return new Promise((resolve, reject) => {
     const http = require("http");
     let retries = 0;
 
     const check = () => {
       const req = http.get(`http://127.0.0.1:${PORT}/`, (res) => {
-        if (res.statusCode === 200) {
-          resolve();
-        } else {
-          retry();
-        }
+        res.resume();
+        if (res.statusCode === 200) resolve();
+        else retry();
       });
 
       req.on("error", () => retry());
-      req.setTimeout(300, () => {
-        req.destroy();
-        retry();
-      });
+      req.setTimeout(300, () => { req.destroy(); retry(); });
     };
 
     const retry = () => {
@@ -131,34 +124,24 @@ app.whenReady().then(async () => {
     createWindow();
   } catch (err) {
     console.error("Failed to start:", err);
-    // Show error dialog
     const { dialog } = require("electron");
     dialog.showErrorBox(
       "Vox — Ошибка запуска",
-      "Не удалось запустить сервер приложения.\n\nУбедитесь, что ffmpeg установлен и доступен в PATH.\n\nПодробности: " +
-        err.message
+      "Не удалось запустить сервер.\nУбедитесь, что ffmpeg установлен.\n\n" + err.message
     );
     app.quit();
   }
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    }
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
 app.on("window-all-closed", () => {
-  if (serverProcess) {
-    serverProcess.kill("SIGTERM");
-    serverProcess = null;
-  }
+  if (serverProcess) { serverProcess.kill("SIGTERM"); serverProcess = null; }
   app.quit();
 });
 
 app.on("before-quit", () => {
-  if (serverProcess) {
-    serverProcess.kill("SIGTERM");
-    serverProcess = null;
-  }
+  if (serverProcess) { serverProcess.kill("SIGTERM"); serverProcess = null; }
 });

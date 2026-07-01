@@ -1,8 +1,8 @@
 {
   "name": "vox-voice-decoder",
   "version": "1.0.0",
-  "private": true,
-  "description": "Vox — Расшифровка голоса. Desktop-приложение для перевода русской речи в текст.",
+  "author": "Rosenfold",
+  "description": "Vox — Расшифровка голоса",
   "main": "electron/main.js",
   "scripts": {
     "dev": "next dev -p 3000",
@@ -10,8 +10,6 @@
     "start": "NODE_ENV=production node .next/standalone/server.js",
     "electron:dev": "next dev -p 3000 & sleep 3 && electron .",
     "electron:build": "npm run build && electron-builder --win",
-    "electron:build:mac": "npm run build && electron-builder --mac",
-    "electron:build:linux": "npm run build && electron-builder --linux",
     "lint": "eslint ."
   },
   "build": {
@@ -21,18 +19,16 @@
       "output": "dist-electron"
     },
     "files": [
-      "electron/**/*",
-      ".next/standalone/**/*",
-      "public/**/*"
+      "electron/**/*"
     ],
     "extraResources": [
       {
         "from": ".next/standalone",
-        "to": "app/.next/standalone"
+        "to": "standalone"
       },
       {
         "from": "public",
-        "to": "app/public"
+        "to": "public"
       }
     ],
     "win": {
@@ -42,42 +38,23 @@
           "arch": ["x64"]
         }
       ],
-      "icon": "public/icon.ico"
+      "icon": "public/icon.png"
     },
     "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "installerIcon": "public/icon.ico",
-      "uninstallerIcon": "public/icon.ico",
-      "installerHeaderIcon": "public/icon.ico",
+      "oneClick": true,
       "createDesktopShortcut": true,
-      "shortcutName": "Vox — Расшифровка голоса"
+      "shortcutName": "Vox"
     },
     "mac": {
       "target": "dmg",
-      "icon": "public/icon.icns"
+      "icon": "public/icon.png"
     },
     "linux": {
       "target": "AppImage",
       "icon": "public/icon.png"
     }
   },
-  "dependencies": {
-    "@radix-ui/react-scroll-area": "^1.2.13",
-    "@radix-ui/react-slot": "^1.2.3",
-    "@radix-ui/react-toast": "^1.2.14",
-    "@radix-ui/react-tooltip": "^1.2.7",
-    "class-variance-authority": "^0.7.1",
-    "clsx": "^2.1.1",
-    "docx": "^9.7.1",
-    "framer-motion": "^12.23.2",
-    "lucide-react": "^0.525.0",
-    "next": "^16.1.1",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "tailwind-merge": "^3.3.1",
-    "z-ai-web-dev-sdk": "^0.0.18"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/react": "^19",
