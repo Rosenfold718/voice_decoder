@@ -6,26 +6,24 @@ const fs = require("fs");
 const PORT = 3456;
 let mainWindow = null;
 let serverProcess = null;
+let errorShown = false;
+
+// --- Single instance lock (prevent hundreds of windows) ---
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+}
 
 const isDev = !app.isPackaged;
 
-// In packaged app: standalone server is in resources/standalone
-// In dev: it's in .next/standalone
 const standaloneDir = isDev
   ? path.join(__dirname, "..", ".next", "standalone")
   : path.join(process.resourcesPath, "standalone");
 
-// Ffmpeg binaries location
-// In packaged app: resources/ffmpeg
-// In dev: resources/ffmpeg (downloaded manually) or system PATH
 const ffmpegDir = isDev
   ? path.join(__dirname, "..", "resources", "ffmpeg")
   : path.join(process.resourcesPath, "ffmpeg");
 
-/**
- * Resolve the path to ffmpeg.exe / ffprobe.exe.
- * Returns null if not found (will fall back to system PATH).
- */
 function resolveFfmpeg() {
   const ffmpegExe = path.join(ffmpegDir, "ffmpeg.exe");
   const ffprobeExe = path.join(ffmpegDir, "ffprobe.exe");
@@ -35,16 +33,12 @@ function resolveFfmpeg() {
   return null;
 }
 
-/**
- * Start the Next.js standalone server as a child process.
- */
 function startServer() {
   const serverScript = path.join(standaloneDir, "server.js");
 
   if (!fs.existsSync(serverScript)) {
-    console.error(`Server script not found: ${serverScript}`);
-    app.quit();
-    return;
+    console.error(`[Vox] Server script not found: ${serverScript}`);
+    return false;
   }
 
   const ffmpegPaths = resolveFfmpeg();
@@ -56,14 +50,10 @@ function startServer() {
     HOSTNAME: "127.0.0.1",
   };
 
-  // If bundled ffmpeg found, pass its directory to the server
-  // so the API routes can use it
   if (ffmpegPaths) {
     env.VOX_FFMPEG_PATH = ffmpegPaths.ffmpeg;
     env.VOX_FFPROBE_PATH = ffmpegPaths.ffprobe;
-    console.log(`[Vox] Using bundled ffmpeg: ${ffmpegPaths.ffmpeg}`);
-  } else if (isDev) {
-    console.log("[Vox] No bundled ffmpeg found, relying on system PATH");
+    console.log(`[Vox] Bundled ffmpeg: ${ffmpegPaths.ffmpeg}`);
   }
 
   serverProcess = spawn(process.execPath, [serverScript], {
@@ -73,27 +63,26 @@ function startServer() {
   });
 
   serverProcess.stdout.on("data", (data) => {
-    const msg = data.toString().trim();
-    if (msg) console.log(`[Server] ${msg}`);
+    console.log(`[Server] ${data.toString().trim()}`);
   });
 
   serverProcess.stderr.on("data", (data) => {
-    const msg = data.toString().trim();
-    if (msg) console.error(`[Server] ${msg}`);
+    console.error(`[Server] ${data.toString().trim()}`);
+  });
+
+  serverProcess.on("error", (err) => {
+    console.error(`[Vox] Failed to spawn server: ${err.message}`);
   });
 
   serverProcess.on("close", (code) => {
-    console.log(`Server exited with code ${code}`);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.close();
-    }
+    console.log(`[Vox] Server exited with code ${code}`);
+    serverProcess = null;
   });
+
+  return true;
 }
 
-/**
- * Create the main browser window.
- */
-function createWindow() {
+function createWindow(errorMsg) {
   mainWindow = new BrowserWindow({
     width: 960,
     height: 720,
@@ -109,17 +98,35 @@ function createWindow() {
   });
 
   Menu.setApplicationMenu(null);
-  mainWindow.loadURL(`http://127.0.0.1:${PORT}`);
+
+  if (errorMsg) {
+    // Show error as a nice HTML page inside the window (no system dialog spam)
+    const html = `<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8">
+<style>
+  body { margin:0; display:flex; align-items:center; justify-content:center; height:100vh;
+    background:#111; color:#e5e5e5; font-family:system-ui,-apple-system,sans-serif; }
+  .box { text-align:center; padding:48px; max-width:480px; }
+  h1 { color:#f87171; font-size:24px; margin-bottom:12px; }
+  p { color:#a1a1aa; font-size:14px; line-height:1.6; }
+  .hint { margin-top:24px; color:#71717a; font-size:12px; }
+</style></head><body>
+<div class="box">
+  <h1>Vox — ошибка запуска</h1>
+  <p>${errorMsg.replace(/</g, "&lt;")}</p>
+  <p class="hint">Попробуйте переустановить приложение.</p>
+</div></body></html>`;
+    mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  } else {
+    mainWindow.loadURL(`http://127.0.0.1:${PORT}`);
+  }
 
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
 }
 
-/**
- * Wait for the server to be ready by polling the URL.
- */
-function waitForServer(maxRetries = 60, interval = 500) {
+function waitForServer(maxRetries = 90, interval = 500) {
   return new Promise((resolve, reject) => {
     const http = require("http");
     let retries = 0;
@@ -138,7 +145,7 @@ function waitForServer(maxRetries = 60, interval = 500) {
     const retry = () => {
       retries++;
       if (retries >= maxRetries) {
-        reject(new Error("Server failed to start"));
+        reject(new Error("Сервер не смог запуститься (таймаут)"));
         return;
       }
       setTimeout(check, interval);
@@ -148,33 +155,45 @@ function waitForServer(maxRetries = 60, interval = 500) {
   });
 }
 
+function killServer() {
+  if (serverProcess) {
+    try {
+      serverProcess.kill(); // default signal — works on Windows
+    } catch (_) {}
+    serverProcess = null;
+  }
+}
+
 // --- App lifecycle ---
 
 app.whenReady().then(async () => {
   try {
-    startServer();
+    const started = startServer();
+    if (!started) {
+      throw new Error("Файл сервера не найден. Попробуйте переустановить.");
+    }
     await waitForServer();
-    createWindow();
+    createWindow(null);
   } catch (err) {
-    console.error("Failed to start:", err);
-    const { dialog } = require("electron");
-    dialog.showErrorBox(
-      "Vox — Ошибка запуска",
-      "Не удалось запустить приложение.\nПопробуйте переустановить.\n\n" + err.message
-    );
-    app.quit();
+    console.error("[Vox] Startup failed:", err.message);
+    killServer();
+    createWindow(err.message);
   }
+});
 
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
+// If a second instance is launched, focus the existing window
+app.on("second-instance", () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  }
 });
 
 app.on("window-all-closed", () => {
-  if (serverProcess) { serverProcess.kill("SIGTERM"); serverProcess = null; }
+  killServer();
   app.quit();
 });
 
 app.on("before-quit", () => {
-  if (serverProcess) { serverProcess.kill("SIGTERM"); serverProcess = null; }
+  killServer();
 });

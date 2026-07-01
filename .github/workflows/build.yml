@@ -34,19 +34,31 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
           Write-Host "Extracting..."
           Expand-Archive -Path $zipPath -DestinationPath "ffmpeg-temp" -Force
-          # Find the extracted folder (name varies by version)
           $ffmpegRoot = Get-ChildItem "ffmpeg-temp" -Directory | Select-Object -First 1
           Write-Host "Found ffmpeg folder: $($ffmpegRoot.FullName)"
-          # Create resources/ffmpeg and copy only the 3 needed binaries
           New-Item -ItemType Directory -Force -Path "resources/ffmpeg"
           Copy-Item "$($ffmpegRoot.FullName)\bin\ffmpeg.exe" "resources\ffmpeg\" -Force
           Copy-Item "$($ffmpegRoot.FullName)\bin\ffprobe.exe" "resources\ffmpeg\" -Force
-          # Verify
           & "resources\ffmpeg\ffmpeg.exe" -version
           Write-Host "ffmpeg bundled successfully"
 
-      - name: Build Next.js + prepare standalone
+      - name: Build Next.js + copy public to standalone
         run: npm run build
+
+      - name: Verify standalone structure
+        shell: pwsh
+        run: |
+          Write-Host "=== Standalone contents ==="
+          Get-ChildItem ".next\standalone" | ForEach-Object { Write-Host $_.Name }
+          Write-Host ""
+          Write-Host "=== node_modules check ==="
+          Test-Path ".next\standalone\node_modules"
+          Write-Host ""
+          Write-Host "=== server.js check ==="
+          Test-Path ".next\standalone\server.js"
+          Write-Host ""
+          Write-Host "=== public check ==="
+          Test-Path ".next\standalone\public"
 
       - name: Build Electron .exe
         run: npx electron-builder --win --publish never
@@ -65,14 +77,20 @@ jobs:
             exit 1
           }
 
-      - name: Create GitHub Release
+      - name: Delete old release assets (re-tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          gh release delete $tag --yes 2>$null; gh release create $tag --title "$tag" --generate-notes
+
+      - name: Upload to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ env.EXE_PATH }}
-          draft: false
-          prerelease: false
-          generate_release_notes: true
 
       - name: Upload installer as artifact (for manual builds)
         if: "!startsWith(github.ref, 'refs/tags/v')"

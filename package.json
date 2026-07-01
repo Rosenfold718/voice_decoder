@@ -6,7 +6,7 @@
   "main": "electron/main.js",
   "scripts": {
     "dev": "next dev -p 3000",
-    "build": "next build && node electron/copy-static.js",
+    "build": "next build && node electron/copy-public.js",
     "start": "NODE_ENV=production node .next/standalone/server.js",
     "electron:dev": "next dev -p 3000 & sleep 3 && electron .",
     "electron:build": "npm run build && electron-builder --win",
@@ -25,10 +25,6 @@
       {
         "from": ".next/standalone",
         "to": "standalone"
-      },
-      {
-        "from": "public",
-        "to": "public"
       },
       {
         "from": "resources/ffmpeg",
