@@ -38,23 +38,41 @@ jobs:
           Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "whisper.zip" -UseBasicParsing
           Expand-Archive -Path "whisper.zip" -DestinationPath "whisper-temp" -Force
           New-Item -ItemType Directory -Force -Path "resources/whisper"
-          # Find the main CLI executable (prefer non-deprecated name)
-          $preferred = @("whisper-whisper-cli.exe", "whisper-cli.exe", "whisper.exe", "main.exe")
-          $exes = Get-ChildItem "whisper-temp" -Recurse -Filter "*.exe" | Where-Object { $_.Name -notlike "*upx*" }
-          $exe = $null
-          foreach ($name in $preferred) {
-            $exe = $exes | Where-Object { $_.Name -eq $name } | Select-Object -First 1
-            if ($exe) { break }
+          # Find the directory with the exe (it also contains required DLLs)
+          $binDir = $null
+          Get-ChildItem "whisper-temp" -Recurse -Filter "*.exe" | Where-Object { $_.Name -notlike "*upx*" } | ForEach-Object {
+            $binDir = $_.DirectoryName
           }
-          # Fallback: any exe if preferred names not found
-          if (-not $exe) { $exe = $exes | Select-Object -First 1 }
-          if ($exe) {
-            Copy-Item $exe.FullName "resources\whisper\vox-whisper.exe" -Force
-            Write-Host "Whisper binary: $($exe.Name) -> vox-whisper.exe"
-          } else {
-            Write-Error "No whisper executable found in archive"
+          if (-not $binDir) {
+            Write-Error "No whisper executable found"
             exit 1
           }
+          # Copy ALL files from bin dir (exe + DLLs like vcruntime140.dll etc.)
+          Get-ChildItem $binDir | ForEach-Object {
+            Write-Host "  Copying: $($_.Name)"
+            Copy-Item $_.FullName "resources\whisper\" -Force
+          }
+          # Rename the main exe to our stable name
+          $preferred = @("whisper-whisper-cli.exe", "whisper-cli.exe", "whisper.exe", "main.exe")
+          $found = $false
+          foreach ($name in $preferred) {
+            if (Test-Path "resources\whisper\$name") {
+              Rename-Item "resources\whisper\$name" "vox-whisper.exe" -Force
+              Write-Host "Renamed: $name -> vox-whisper.exe"
+              $found = $true
+              break
+            }
+          }
+          if (-not $found) {
+            # Any exe in the dir
+            $any = Get-ChildItem "resources\whisper\*.exe" | Select-Object -First 1
+            if ($any) {
+              Rename-Item $any.FullName "vox-whisper.exe" -Force
+              Write-Host "Renamed: $($any.Name) -> vox-whisper.exe"
+            }
+          }
+          Write-Host "=== whisper dir contents ==="
+          Get-ChildItem "resources\whisper" | ForEach-Object { Write-Host "  $($_.Name) ($([math]::Round($_.Length/1KB, 0)) KB)" }
 
       - name: Download whisper model (medium, ~1.5GB — best Russian accuracy)
         shell: pwsh
