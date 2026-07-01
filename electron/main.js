@@ -138,28 +138,39 @@ async function runWhisper(wavPath, modelPath) {
   fs.mkdirSync(outputDir, { recursive: true });
 
   const baseName = path.basename(wavPath, ".wav");
+  const outputPath = path.join(outputDir, `${baseName}.txt`);
 
   // Use all available CPU threads for faster processing
   const numCpus = require('os').cpus().length;
   const threads = Math.max(1, Math.min(numCpus, 8));
-  console.log(`[Vox] Whisper: using ${threads} threads`);
+  console.log(`[Vox] Whisper: ${path.basename(whisperExe)}, model: ${path.basename(modelPath)}, threads: ${threads}`);
 
-  await execFileAsync(whisperExe, [
-    "-m", modelPath,
-    "-f", wavPath,
-    "-l", "ru",
-    "-t", String(threads),
-    "--no-timestamps",
-    "--output-format", "txt",
-    "--output-dir", outputDir,
-  ], {
-    timeout: 1800_000, // 30 minutes max for long audio
-    maxBuffer: 50 * 1024 * 1024,
-  });
+  let stdout = "";
+  let stderr = "";
+  try {
+    const result = await execFileAsync(whisperExe, [
+      "-m", modelPath,
+      "-f", wavPath,
+      "-l", "ru",
+      "-t", String(threads),
+      "--no-timestamps",
+      "--output-file", outputPath,
+    ], {
+      timeout: 1800_000,
+      maxBuffer: 50 * 1024 * 1024,
+    });
+    stdout = result.stdout || "";
+    stderr = result.stderr || "";
+  } catch (err) {
+    stderr = err.stderr || err.stdout || "";
+    console.error(`[Vox] Whisper failed (code ${err.code || "?"}):`);
+    console.error(stderr);
+    throw new Error(`Whisper вернул ошибку: ${(stderr || "код " + (err.code || "?")).substring(0, 500)}`);
+  }
 
-  const txtPath = path.join(outputDir, `${baseName}.txt`);
-  if (fs.existsSync(txtPath)) {
-    return fs.readFileSync(txtPath, "utf8").trim();
+  // Read output file
+  if (fs.existsSync(outputPath)) {
+    return fs.readFileSync(outputPath, "utf8").trim();
   }
   return "";
 }
@@ -314,19 +325,26 @@ p{color:#a1a1aa;font-size:14px;line-height:1.6}
 /* ------------------------------------------------------------------ */
 /*  App lifecycle                                                     */
 /* ------------------------------------------------------------------ */
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // Check if out/ exists
   if (!fs.existsSync(path.join(outDir, "index.html"))) {
     showErrorPage("Файлы приложения не найдены. Переустановите.");
     return;
   }
 
-  // Check if whisper exists
+  // Check if whisper exists and runs
   const whisperExe = findWhisperExe();
   const modelPath = findModel();
   if (!whisperExe || !modelPath) {
     showErrorPage("Модель распознавания речи не найдена. Переустановите.");
     return;
+  }
+
+  // Quick sanity check — run whisper --help to verify binary works
+  try {
+    await execFileAsync(whisperExe, ["--help"], { timeout: 10_000 });
+  } catch (e) {
+    console.error("[Vox] Whisper binary test failed:", e.stderr || e.message);
   }
 
   registerIpc();
