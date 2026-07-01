@@ -14,16 +14,16 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "VOX DECODER — AI Расшифровка голоса",
-  description: "Распознавание русской речи с помощью AI. Загрузите MP3 и получите текст с возможностью экспорта в Word.",
-  keywords: ["распознавание речи", "транскрибация", "Russian ASR", "голос в текст", "speech to text", "AI"],
+  title: "Vox — Расшифровка голоса",
+  description: "Загрузите аудиофайл или запишите голос — получите текст с экспортом в Word.",
+  keywords: ["распознавание речи", "транскрибация", "голос в текст", "speech to text"],
   authors: [{ name: "Z.ai" }],
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
   },
   openGraph: {
-    title: "VOX DECODER — AI Расшифровка голоса",
-    description: "AI-распознавание русской речи. MP3 в текст с экспортом в Word.",
+    title: "Vox — Расшифровка голоса",
+    description: "Загрузите аудиофайл или запишите голос — получите текст.",
     type: "website",
   },
 };

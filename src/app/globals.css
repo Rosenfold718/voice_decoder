@@ -121,36 +121,32 @@
   }
 }
 
-/* Custom scrollbar for dark theme */
+/* Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
-
 ::-webkit-scrollbar-track {
   background: transparent;
 }
-
 ::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.08);
   border-radius: 3px;
 }
-
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.14);
 }
 
-/* Textarea reset for dark theme */
-textarea {
-  caret-color: #10b981;
-}
-
-textarea::placeholder {
-  color: rgba(255, 255, 255, 0.15);
-}
-
-/* Smooth selection color */
+/* Selection */
 ::selection {
-  background: rgba(16, 185, 129, 0.3);
+  background: rgba(255, 255, 255, 0.12);
   color: white;
+}
+
+/* Textarea */
+textarea {
+  caret-color: white;
+}
+textarea::placeholder {
+  color: rgba(255, 255, 255, 0.2);
 }
