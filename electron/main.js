@@ -140,13 +140,7 @@ async function convertToWav(inputPath, outputDir) {
 
 async function runWhisper(wavPath, modelPath) {
   const whisperExe = findWhisperExe();
-  const outputDir = path.join(path.dirname(wavPath), "whisper-out");
-  fs.mkdirSync(outputDir, { recursive: true });
 
-  const baseName = path.basename(wavPath, ".wav");
-  const outputPath = path.join(outputDir, `${baseName}.txt`);
-
-  // Use all available CPU threads for faster processing
   const numCpus = require('os').cpus().length;
   const threads = Math.max(1, Math.min(numCpus, 8));
   console.log(`[Vox] Whisper: ${path.basename(whisperExe)}, model: ${path.basename(modelPath)}, threads: ${threads}`);
@@ -160,25 +154,21 @@ async function runWhisper(wavPath, modelPath) {
       "-l", "ru",
       "-t", String(threads),
       "--no-timestamps",
-      "--output-file", outputPath,
     ], {
       timeout: 1800_000,
       maxBuffer: 50 * 1024 * 1024,
     });
-    stdout = result.stdout || "";
+    stdout = (result.stdout || "").trim();
     stderr = result.stderr || "";
+    console.log("[Vox] Whisper stdout:", stdout.substring(0, 200));
   } catch (err) {
     stderr = err.stderr || err.stdout || "";
     console.error(`[Vox] Whisper failed (code ${err.code || "?"}):`);
-    console.error(stderr);
+    console.error(stderr.substring(0, 1000));
     throw new Error(`Whisper вернул ошибку: ${(stderr || "код " + (err.code || "?")).substring(0, 500)}`);
   }
 
-  // Read output file
-  if (fs.existsSync(outputPath)) {
-    return fs.readFileSync(outputPath, "utf8").trim();
-  }
-  return "";
+  return stdout;
 }
 
 /* ------------------------------------------------------------------ */

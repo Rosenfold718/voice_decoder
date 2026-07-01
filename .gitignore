@@ -1,52 +1,13 @@
-# Dependencies
+skills/
 node_modules/
-
-# Next.js
 .next/
 out/
-
-# Build output
-dist-electron/
-
-# Bundled binaries (downloaded by CI)
-resources/ffmpeg/
-resources/whisper/
-
-# Environment (contains API keys)
-.env
-.env.*
-!.env.example
-
-# Logs
-*.log
-dev.log
-server.log
-
-# OS
-.DS_Store
-Thumbs.db
-
-# TypeScript
-*.tsbuildinfo
-next-env.d.ts
-
-# Misc
-.claude
-.z-ai-config
-.zscripts/
-Caddyfile
-db/
-download/
-examples/
-tool-results/
 upload/
-screenshot-*.png
+*.exe
+*.zip
+*.bin
+dist-electron/
+resources/whisper/
+resources/ffmpeg/
+.env
 worklog.md
-bun.lock
-
-# IDE
-.idea/
-.vscode/
-
-# Skills (internal)
-skills/
