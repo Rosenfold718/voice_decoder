@@ -165,6 +165,7 @@ export default function VoxPage() {
   const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
+  const [micWorking, setMicWorking] = useState<boolean | null>(null); // null = checking
   const audioLevel = useAudioLevel(mediaStream);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -307,6 +308,59 @@ export default function VoxPage() {
 
     return () => clearInterval(check);
   }, [status, recSeconds, audioLevel, stopRecording]);
+
+  // Proactive mic check when switching to Record tab
+  useEffect(() => {
+    if (mode !== "record") {
+      setMicWorking(null);
+      return;
+    }
+
+    // If getUserMedia doesn't exist at all — immediately mark as broken
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setMicWorking(false);
+      return;
+    }
+
+    let cancelled = false;
+    setMicWorking(null); // checking...
+
+    (async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
+
+        // Listen for actual audio data for 800ms
+        const ctx = new AudioContext();
+        const source = ctx.createMediaStreamSource(stream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        source.connect(analyser);
+        const data = new Uint8Array(analyser.frequencyBinCount);
+
+        let hasSignal = false;
+        const checkStart = Date.now();
+        const probe = () => {
+          if (cancelled || Date.now() - checkStart > 800) {
+            source.disconnect();
+            ctx.close();
+            stream.getTracks().forEach((t) => t.stop());
+            if (!cancelled) setMicWorking(hasSignal);
+            return;
+          }
+          analyser.getByteFrequencyData(data);
+          const avg = data.reduce((a, b) => a + b, 0) / data.length;
+          if (avg > 1) hasSignal = true;
+          requestAnimationFrame(probe);
+        };
+        requestAnimationFrame(probe);
+      } catch {
+        if (!cancelled) setMicWorking(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [mode]);
 
   useEffect(() => {
     return () => cleanupRecording();
@@ -476,14 +530,14 @@ export default function VoxPage() {
                 {/* ---- RECORD MODE ---- */}
                 {mode === "record" && (
                   <div className="flex flex-col items-center py-12 sm:py-16">
-                    {/* Sandbox / iframe warning banner */}
-                    {!navigator.mediaDevices?.getUserMedia && (
+                    {/* Mic unavailable / sandbox warning banner */}
+                    {micWorking === false && (
                       <div className="w-full rounded-xl bg-amber-500/[0.06] border border-amber-500/15 px-5 py-4 mb-8 text-center">
                         <p className="text-[13px] text-amber-400/80 mb-1.5">
                           Запись голоса недоступна в этой среде
                         </p>
                         <p className="text-[12px] text-white/30 mb-4 leading-relaxed">
-                          Функция записи требует прямого открытия в браузере на вашем ПК.
+                          Микрофон не захватывает звук. Запись работает при открытии приложения напрямую в браузере на ПК.
                         </p>
                         <button
                           onClick={() => setMode("file")}
@@ -494,16 +548,24 @@ export default function VoxPage() {
                       </div>
                     )}
 
+                    {/* Checking mic... spinner */}
+                    {micWorking === null && (
+                      <div className="flex items-center justify-center gap-2 mb-6">
+                        <div className="w-3 h-3 rounded-full border border-white/15 border-t-white/40 animate-spin" />
+                        <span className="text-[12px] text-white/25">Проверка микрофона...</span>
+                      </div>
+                    )}
+
                     {status !== "recording" ? (
                       <>
                         <button
                           onClick={startRecording}
-                          disabled={!navigator.mediaDevices?.getUserMedia}
+                          disabled={micWorking === false}
                           className={cn(
                             "w-20 h-20 rounded-full border flex items-center justify-center transition-all duration-200 mb-6 group",
-                            navigator.mediaDevices?.getUserMedia
-                              ? "bg-white/[0.06] hover:bg-white/[0.09] border-white/[0.08]"
-                              : "bg-white/[0.02] border-white/[0.04] opacity-40 cursor-not-allowed"
+                            micWorking === false
+                              ? "bg-white/[0.02] border-white/[0.04] opacity-40 cursor-not-allowed"
+                              : "bg-white/[0.06] hover:bg-white/[0.09] border-white/[0.08]"
                           )}
                         >
                           <Mic className="w-7 h-7 text-white/40 group-hover:text-white/60 transition-colors" />
